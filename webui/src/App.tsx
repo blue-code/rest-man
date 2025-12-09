@@ -1,11 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
+
+interface FileUpload {
+  name: string;
+  filename: string;
+  data: string; // base64
+  content_type: string;
+}
 
 interface HttpRequest {
   method: string;
   url: string;
   headers: Record<string, string>;
   body: string | null;
+  files?: FileUpload[];
 }
 
 interface HttpResponse {
@@ -23,7 +31,14 @@ interface HistoryItem {
   timestamp: number;
 }
 
-type TabType = "params" | "headers" | "body";
+interface OpenApiEndpoint {
+  method: string;
+  path: string;
+  summary?: string;
+  description?: string;
+}
+
+type TabType = "params" | "headers" | "body" | "files";
 
 function App() {
   const [method, setMethod] = useState("GET");
@@ -34,6 +49,7 @@ function App() {
   ]);
   const [params, setParams] = useState<Array<{ key: string; value: string }>>([]);
   const [body, setBody] = useState("");
+  const [files, setFiles] = useState<FileUpload[]>([]);
   const [response, setResponse] = useState<HttpResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +58,10 @@ function App() {
   const [showEnvVars, setShowEnvVars] = useState(false);
   const [newEnvKey, setNewEnvKey] = useState("");
   const [newEnvValue, setNewEnvValue] = useState("");
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  const [importedEndpoints, setImportedEndpoints] = useState<OpenApiEndpoint[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadHistory();
@@ -92,6 +112,38 @@ function App() {
 
   const removeParam = (index: number) => {
     setParams(params.filter((_, i) => i !== index));
+  };
+
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = event.target.files;
+    if (!selectedFiles) return;
+
+    const newFiles: FileUpload[] = [];
+
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const file = selectedFiles[i];
+      const reader = new FileReader();
+
+      await new Promise((resolve) => {
+        reader.onload = (e) => {
+          const base64 = (e.target?.result as string).split(",")[1];
+          newFiles.push({
+            name: "file",
+            filename: file.name,
+            data: base64,
+            content_type: file.type || "application/octet-stream",
+          });
+          resolve(null);
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    setFiles([...files, ...newFiles]);
+  };
+
+  const removeFile = (index: number) => {
+    setFiles(files.filter((_, i) => i !== index));
   };
 
   const addEnvVar = async () => {
@@ -147,6 +199,7 @@ function App() {
         url: buildUrlWithParams(),
         headers: headersObj,
         body: body || null,
+        files: files.length > 0 ? files : undefined,
       };
 
       const res = await invoke<HttpResponse>("send_request", { request });
@@ -157,6 +210,28 @@ function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const importOpenApi = async () => {
+    if (!importUrl) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const endpoints = await invoke<OpenApiEndpoint[]>("import_openapi", { url: importUrl });
+      setImportedEndpoints(endpoints);
+    } catch (err: any) {
+      setError(err.toString());
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadEndpoint = (endpoint: OpenApiEndpoint) => {
+    setMethod(endpoint.method);
+    setUrl(endpoint.path);
+    setShowImportModal(false);
+    setImportedEndpoints([]);
   };
 
   const loadFromHistory = (item: HistoryItem) => {
@@ -188,6 +263,9 @@ function App() {
         <h1>RestMan - API Client</h1>
         <button className="button" onClick={() => setShowEnvVars(!showEnvVars)}>
           {showEnvVars ? "Hide" : "Show"} Environment Variables
+        </button>
+        <button className="button" onClick={() => setShowImportModal(true)}>
+          Import OpenAPI
         </button>
       </div>
 
@@ -261,6 +339,9 @@ function App() {
               <button className={`tab ${activeTab === "body" ? "active" : ""}`} onClick={() => setActiveTab("body")}>
                 Body
               </button>
+              <button className={`tab ${activeTab === "files" ? "active" : ""}`} onClick={() => setActiveTab("files")}>
+                Files {files.length > 0 && `(${files.length})`}
+              </button>
             </div>
 
             {activeTab === "params" && (
@@ -298,6 +379,28 @@ function App() {
                 <textarea className="body-editor" placeholder="Enter request body (JSON, XML, etc.)" value={body} onChange={(e) => setBody(e.target.value)} />
               </div>
             )}
+
+            {activeTab === "files" && (
+              <div>
+                <div className="file-upload-section">
+                  <input type="file" ref={fileInputRef} multiple onChange={handleFileSelect} style={{ display: "none" }} />
+                  <button className="add-button" onClick={() => fileInputRef.current?.click()}>
+                    + Add Files
+                  </button>
+                  <div style={{ marginTop: "15px" }}>
+                    {files.map((file, idx) => (
+                      <div key={idx} className="file-item">
+                        <span>{file.filename}</span>
+                        <span style={{ color: "#888", fontSize: "12px", marginLeft: "10px" }}>({file.content_type})</span>
+                        <button onClick={() => removeFile(idx)} style={{ marginLeft: "auto" }}>
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {error && <div className="error">Error: {error}</div>}
@@ -326,6 +429,44 @@ function App() {
           )}
         </div>
       </div>
+
+      {showImportModal && (
+        <div className="modal-overlay" onClick={() => setShowImportModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Import OpenAPI Specification</h2>
+            <div style={{ marginTop: "20px" }}>
+              <input
+                type="text"
+                placeholder="Enter OpenAPI spec URL (JSON or YAML)"
+                value={importUrl}
+                onChange={(e) => setImportUrl(e.target.value)}
+                style={{ width: "100%", marginBottom: "15px" }}
+              />
+              <button className="button" onClick={importOpenApi} disabled={loading}>
+                {loading ? "Importing..." : "Import"}
+              </button>
+              <button className="button" onClick={() => setShowImportModal(false)} style={{ marginLeft: "10px" }}>
+                Cancel
+              </button>
+            </div>
+
+            {importedEndpoints.length > 0 && (
+              <div style={{ marginTop: "20px", maxHeight: "400px", overflowY: "auto" }}>
+                <h3>Imported Endpoints ({importedEndpoints.length})</h3>
+                {importedEndpoints.map((endpoint, idx) => (
+                  <div key={idx} className="endpoint-item" onClick={() => loadEndpoint(endpoint)}>
+                    <div>
+                      <span className="method">{endpoint.method}</span>
+                      <span style={{ marginLeft: "10px" }}>{endpoint.path}</span>
+                    </div>
+                    {endpoint.summary && <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>{endpoint.summary}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

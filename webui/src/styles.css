@@ -337,3 +337,106 @@ body {
   border-radius: 4px;
   margin-bottom: 10px;
 }
+
+/* File Upload Styles */
+.file-upload-section {
+  min-height: 100px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  background-color: #2d2d30;
+  padding: 10px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+}
+
+.file-item button {
+  background-color: #3e3e42;
+  color: #d4d4d4;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.file-item button:hover {
+  background-color: #f14c4c;
+  color: white;
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background-color: #252526;
+  border-radius: 8px;
+  padding: 30px;
+  min-width: 600px;
+  max-width: 80vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.modal h2 {
+  color: #cccccc;
+  margin-bottom: 20px;
+  font-size: 20px;
+}
+
+.modal h3 {
+  color: #cccccc;
+  margin-bottom: 15px;
+  font-size: 16px;
+}
+
+.modal input[type="text"] {
+  background-color: #3c3c3c;
+  color: #d4d4d4;
+  border: 1px solid #3e3e42;
+  padding: 10px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.modal input[type="text"]:focus {
+  outline: none;
+  border-color: #007acc;
+}
+
+/* Endpoint Item Styles */
+.endpoint-item {
+  background-color: #2d2d30;
+  padding: 12px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.endpoint-item:hover {
+  background-color: #37373d;
+}
+
+.endpoint-item .method {
+  font-weight: 600;
+  font-size: 13px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background-color: #0e639c;
+  color: white;
+}

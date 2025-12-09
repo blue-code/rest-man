@@ -6,6 +6,15 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::State;
 
+// File upload structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FileUpload {
+    name: String,
+    filename: String,
+    data: String, // base64 encoded
+    content_type: String,
+}
+
 // Request and Response structures
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HttpRequest {
@@ -13,6 +22,7 @@ struct HttpRequest {
     url: String,
     headers: HashMap<String, String>,
     body: Option<String>,
+    files: Option<Vec<FileUpload>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +40,14 @@ struct HistoryItem {
     url: String,
     status: u16,
     timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenApiEndpoint {
+    method: String,
+    path: String,
+    summary: Option<String>,
+    description: Option<String>,
 }
 
 // Application state for managing history
@@ -63,14 +81,48 @@ async fn send_request(request: HttpRequest, state: State<'_, AppState>) -> Resul
 
     let mut req_builder = client.request(method, &url);
 
-    // Add headers
-    for (key, value) in request.headers.iter() {
-        req_builder = req_builder.header(key, value);
-    }
+    // Handle multipart file upload
+    if let Some(files) = &request.files {
+        if !files.is_empty() {
+            let mut form = reqwest::multipart::Form::new();
 
-    // Add body if present
-    if let Some(body_content) = body {
-        req_builder = req_builder.body(body_content);
+            // Add files
+            for file in files {
+                let data = base64::decode(&file.data).map_err(|e| e.to_string())?;
+                let part = reqwest::multipart::Part::bytes(data)
+                    .file_name(file.filename.clone())
+                    .mime_str(&file.content_type)
+                    .map_err(|e| e.to_string())?;
+                form = form.part(file.name.clone(), part);
+            }
+
+            // Add other form fields from body if present
+            if let Some(body_content) = &body {
+                if let Ok(json_body) = serde_json::from_str::<HashMap<String, serde_json::Value>>(body_content) {
+                    for (key, value) in json_body {
+                        if let Some(text) = value.as_str() {
+                            form = form.text(key, text.to_string());
+                        }
+                    }
+                }
+            }
+
+            req_builder = req_builder.multipart(form);
+        } else if let Some(body_content) = body {
+            // Regular body
+            for (key, value) in request.headers.iter() {
+                req_builder = req_builder.header(key, value);
+            }
+            req_builder = req_builder.body(body_content);
+        }
+    } else {
+        // No files, regular request
+        for (key, value) in request.headers.iter() {
+            req_builder = req_builder.header(key, value);
+        }
+        if let Some(body_content) = body {
+            req_builder = req_builder.body(body_content);
+        }
     }
 
     // Send request
@@ -109,6 +161,76 @@ async fn send_request(request: HttpRequest, state: State<'_, AppState>) -> Resul
         body,
         time_ms: duration.as_millis(),
     })
+}
+
+// Import OpenAPI specification from URL
+#[tauri::command]
+async fn import_openapi(url: String) -> Result<Vec<OpenApiEndpoint>, String> {
+    let client = reqwest::Client::new();
+    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let spec_text = response.text().await.map_err(|e| e.to_string())?;
+
+    // Try parsing as JSON first, then YAML
+    let openapi: openapiv3::OpenAPI = if spec_text.trim().starts_with('{') {
+        serde_json::from_str(&spec_text).map_err(|e| format!("Failed to parse JSON: {}", e))?
+    } else {
+        serde_yaml::from_str(&spec_text).map_err(|e| format!("Failed to parse YAML: {}", e))?
+    };
+
+    let mut endpoints = Vec::new();
+
+    // Extract paths and operations
+    for (path, path_item) in openapi.paths.paths.iter() {
+        if let openapiv3::ReferenceOr::Item(item) = path_item {
+            // GET
+            if let Some(op) = &item.get {
+                endpoints.push(OpenApiEndpoint {
+                    method: "GET".to_string(),
+                    path: path.clone(),
+                    summary: op.summary.clone(),
+                    description: op.description.clone(),
+                });
+            }
+            // POST
+            if let Some(op) = &item.post {
+                endpoints.push(OpenApiEndpoint {
+                    method: "POST".to_string(),
+                    path: path.clone(),
+                    summary: op.summary.clone(),
+                    description: op.description.clone(),
+                });
+            }
+            // PUT
+            if let Some(op) = &item.put {
+                endpoints.push(OpenApiEndpoint {
+                    method: "PUT".to_string(),
+                    path: path.clone(),
+                    summary: op.summary.clone(),
+                    description: op.description.clone(),
+                });
+            }
+            // PATCH
+            if let Some(op) = &item.patch {
+                endpoints.push(OpenApiEndpoint {
+                    method: "PATCH".to_string(),
+                    path: path.clone(),
+                    summary: op.summary.clone(),
+                    description: op.description.clone(),
+                });
+            }
+            // DELETE
+            if let Some(op) = &item.delete {
+                endpoints.push(OpenApiEndpoint {
+                    method: "DELETE".to_string(),
+                    path: path.clone(),
+                    summary: op.summary.clone(),
+                    description: op.description.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(endpoints)
 }
 
 // Get request history
@@ -164,6 +286,7 @@ fn main() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             send_request,
+            import_openapi,
             get_history,
             clear_history,
             set_env_var,
