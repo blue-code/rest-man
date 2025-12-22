@@ -193,7 +193,9 @@ export function ResponsePanel({
                       {entry.method}
                     </span>
                     <div className="history-item__meta">
-                      <div className="history-item__url">{entry.url}</div>
+                      <div className="history-item__url">
+                        {entry.resolved_url || entry.url}
+                      </div>
                       <div className="history-item__time">
                         {formatTimestamp(entry.created_at)}
                       </div>

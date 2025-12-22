@@ -12,7 +12,7 @@ tauri-build = { version = "1.5", features = [] }
 tauri = { version = "1.5", features = ["shell-open", "fs-all", "dialog-all", "path-all", "http-all"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.11", features = ["json", "multipart", "stream"] }
+reqwest = { version = "0.11", features = ["json", "multipart", "stream", "cookies"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 chrono = { version = "0.4", features = ["serde"] }

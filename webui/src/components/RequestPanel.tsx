@@ -8,6 +8,10 @@ type RequestPanelProps = {
   onSend: () => void;
   isSending: boolean;
   selectedEndpoint: Endpoint | null;
+  autoRequestEnabled: boolean;
+  onToggleAutoRequest: (enabled: boolean) => void;
+  autoRequestIntervalMs: number;
+  onAutoRequestIntervalChange: (intervalMs: number) => void;
   paramValues: Record<string, string>;
   onParamChange: (name: string, value: string) => void;
   requestBody: string;
@@ -32,6 +36,10 @@ export function RequestPanel({
   onSend,
   isSending,
   selectedEndpoint,
+  autoRequestEnabled,
+  onToggleAutoRequest,
+  autoRequestIntervalMs,
+  onAutoRequestIntervalChange,
   paramValues,
   onParamChange,
   requestBody,
@@ -41,17 +49,44 @@ export function RequestPanel({
   const parameters = selectedEndpoint?.parameters ?? [];
   const bodyRequired = selectedEndpoint?.body_required;
   const bodyDescription = selectedEndpoint?.body_description;
+  const autoToggleDisabled = !selectedEndpoint;
 
   return (
     <section className="panel panel--request">
-      <div className="panel__header">
-        <div className="panel__title">Request</div>
-        <div className="panel__hint">
-          {selectedEndpoint
-            ? selectedEndpoint.summary ||
-              selectedEndpoint.description ||
-              "Loaded from collection"
-            : "Select an endpoint or type a URL"}
+      <div className="panel__header panel__header--split">
+        <div>
+          <div className="panel__title">Request</div>
+          <div className="panel__hint">
+            {selectedEndpoint
+              ? selectedEndpoint.summary ||
+                selectedEndpoint.description ||
+                "Loaded from collection"
+              : "Select an endpoint or type a URL"}
+          </div>
+        </div>
+        <div className="panel__actions">
+          <label className="sync-toggle">
+            <input
+              type="checkbox"
+              checked={autoRequestEnabled}
+              disabled={autoToggleDisabled}
+              onChange={(event) => onToggleAutoRequest(event.target.checked)}
+            />
+            <span className="sync-toggle__label">자동 호출</span>
+          </label>
+          <select
+            className="interval-select"
+            value={String(autoRequestIntervalMs)}
+            onChange={(event) =>
+              onAutoRequestIntervalChange(Number(event.target.value))
+            }
+            disabled={autoToggleDisabled}
+            aria-label="자동 호출 간격"
+          >
+            <option value="30000">30초</option>
+            <option value="60000">1분</option>
+            <option value="300000">5분</option>
+          </select>
         </div>
       </div>
       <div className="panel__body">

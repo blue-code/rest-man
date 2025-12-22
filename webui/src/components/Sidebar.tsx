@@ -5,9 +5,13 @@ type SidebarProps = {
   openApiUrl: string;
   onOpenApiUrlChange: (value: string) => void;
   onImport: () => void;
+  openApiHistory: string[];
+  onSelectOpenApiHistory: (url: string) => void;
   collections: Record<string, Collection>;
   selectedEndpointKey: string | null;
   onSelectEndpoint: (endpoint: Endpoint) => void;
+  syncStatus: "idle" | "syncing" | "updated";
+  lastSyncedAt: number | null;
   isImporting: boolean;
 };
 
@@ -24,13 +28,31 @@ function endpointLabel(endpoint: Endpoint) {
   return `요청: ${pathName || "기본"}`;
 }
 
+function formatSyncLabel(
+  status: "idle" | "syncing" | "updated",
+  lastSyncedAt: number | null
+) {
+  if (status === "syncing") {
+    return "OpenAPI 동기화 중";
+  }
+  if (lastSyncedAt) {
+    const time = new Date(lastSyncedAt).toLocaleTimeString();
+    return `최근 동기화 ${time}`;
+  }
+  return "동기화 대기";
+}
+
 export function Sidebar({
   openApiUrl,
   onOpenApiUrlChange,
   onImport,
+  openApiHistory,
+  onSelectOpenApiHistory,
   collections,
   selectedEndpointKey,
   onSelectEndpoint,
+  syncStatus,
+  lastSyncedAt,
   isImporting,
 }: SidebarProps) {
   const collectionValues = Object.values(collections);
@@ -64,7 +86,7 @@ export function Sidebar({
         Object.keys(collection.groups).forEach((tag) => {
           const key = `${collection.url}::${tag}`;
           if (next[key] === undefined) {
-            next[key] = true;
+            next[key] = false;
             changed = true;
           }
         });
@@ -90,6 +112,20 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar__header">
+        <div className="sync-banner">
+          <span
+            className={
+              syncStatus === "syncing"
+                ? "sync-dot sync-dot--syncing"
+                : syncStatus === "updated"
+                ? "sync-dot sync-dot--updated"
+                : "sync-dot"
+            }
+          />
+          <span className="sync-text">
+            {formatSyncLabel(syncStatus, lastSyncedAt)}
+          </span>
+        </div>
         <div className="brand">
           <div className="brand__name">RestMan</div>
           <div className="brand__tagline">OpenAPI-driven request console</div>
@@ -114,6 +150,24 @@ export function Sidebar({
             </button>
           </div>
         </div>
+        {openApiHistory.length > 0 && (
+          <div className="openapi-history">
+            <div className="field-label">최근 OpenAPI</div>
+            <div className="openapi-history__list">
+              {openApiHistory.map((url) => (
+                <button
+                  key={url}
+                  type="button"
+                  className="openapi-history__item"
+                  onClick={() => onSelectOpenApiHistory(url)}
+                  title={url}
+                >
+                  {url}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="sidebar__content">
@@ -170,15 +224,22 @@ export function Sidebar({
                       endpoints.map((endpoint) => {
                         const key = endpointKey(endpoint);
                         return (
-                          <button
+                          <div
                             key={key}
-                            type="button"
+                            role="button"
+                            tabIndex={0}
                             className={`endpoint ${
                               selectedEndpointKey === key
                                 ? "endpoint--active"
                                 : ""
                             }`}
                             onClick={() => onSelectEndpoint(endpoint)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                onSelectEndpoint(endpoint);
+                              }
+                            }}
                           >
                             <span
                               className={`method-pill method-pill--${endpoint.method}`}
@@ -196,7 +257,7 @@ export function Sidebar({
                                 {endpoint.path}
                               </span>
                             </span>
-                          </button>
+                          </div>
                         );
                       })}
                   </div>

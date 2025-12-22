@@ -47,6 +47,7 @@ struct OpenApiCollection {
 
 struct AppState {
     collections: Arc<Mutex<HashMap<String, OpenApiCollection>>>,
+    client: Client,
 }
 
 fn resolve_ref<'a>(doc: &'a Value, value: &'a Value, depth: usize) -> &'a Value {
@@ -299,8 +300,9 @@ async fn request(
     url: String,
     headers: HashMap<String, String>,
     body: Option<String>,
+    state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let client = Client::new();
+    let client = state.client.clone();
     let req_method = match method.to_uppercase().as_str() {
         "GET" => reqwest::Method::GET,
         "POST" => reqwest::Method::POST,
@@ -397,7 +399,14 @@ async fn background_update_checker(app_handle: tauri::AppHandle) {
 
 #[tokio::main]
 async fn main() {
-    let state = AppState { collections: Arc::new(Mutex::new(HashMap::new())), };
+    let client = Client::builder()
+        .cookie_store(true)
+        .build()
+        .expect("failed to build HTTP client");
+    let state = AppState {
+        collections: Arc::new(Mutex::new(HashMap::new())),
+        client,
+    };
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![request, download_file, import_openapi, toggle_sync])
