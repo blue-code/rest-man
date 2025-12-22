@@ -1,298 +1,411 @@
-// Prevents additional console window on Windows in release builds
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
+use tauri::{command, State, Manager};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use std::sync::Mutex;
-use tauri::State;
+use tokio::time::{sleep, Duration};
+use chrono::{DateTime, Utc};
+use tokio::fs::File;
+use futures_util::StreamExt;
+use serde_json::{Map, Value};
 
-// File upload structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FileUpload {
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Parameter {
     name: String,
-    filename: String,
-    data: String, // base64 encoded
-    content_type: String,
+    in_type: String,
+    description: Option<String>,
+    required: bool,
+    example: Option<serde_json::Value>,
 }
 
-// Request and Response structures
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: HashMap<String, String>,
-    body: Option<String>,
-    files: Option<Vec<FileUpload>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct HttpResponse {
-    status: u16,
-    headers: HashMap<String, String>,
-    body: String,
-    time_ms: u128,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct HistoryItem {
-    id: Option<i64>,
-    method: String,
-    url: String,
-    status: u16,
-    timestamp: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenApiEndpoint {
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Endpoint {
     method: String,
     path: String,
     summary: Option<String>,
     description: Option<String>,
+    parameters: Vec<Parameter>,
+    body_example: Option<String>,
+    body_description: Option<String>,
+    body_required: bool,
 }
 
-// Application state for managing history
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct OpenApiCollection {
+    name: String,
+    url: String,
+    groups: HashMap<String, Vec<Endpoint>>,
+    last_updated: DateTime<Utc>,
+    etag: Option<String>,
+    sync_enabled: bool,
+}
+
 struct AppState {
-    history: Mutex<Vec<HistoryItem>>,
-    environment_vars: Mutex<HashMap<String, String>>,
+    collections: Arc<Mutex<HashMap<String, OpenApiCollection>>>,
 }
 
-// Send HTTP request command
-#[tauri::command]
-async fn send_request(request: HttpRequest, state: State<'_, AppState>) -> Result<HttpResponse, String> {
-    let start = std::time::Instant::now();
+fn resolve_ref<'a>(doc: &'a Value, value: &'a Value, depth: usize) -> &'a Value {
+    if depth > 10 {
+        return value;
+    }
+    if let Some(ref_path) = value.get("$ref").and_then(|v| v.as_str()) {
+        if let Some(resolved) = doc.pointer(ref_path.trim_start_matches('#')) {
+            return resolve_ref(doc, resolved, depth + 1);
+        }
+    }
+    value
+}
 
-    // Build HTTP client
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true) // For testing purposes
-        .build()
-        .map_err(|e| e.to_string())?;
+fn extract_schema_example(doc: &Value, schema: &Value) -> Option<Value> {
+    let resolved = resolve_ref(doc, schema, 0);
+    if let Some(example) = resolved.get("example") {
+        if !example.is_null() {
+            return Some(example.clone());
+        }
+    }
+    if let Some(default) = resolved.get("default") {
+        if !default.is_null() {
+            return Some(default.clone());
+        }
+    }
+    if let Some(enum_values) = resolved.get("enum").and_then(|v| v.as_array()) {
+        if let Some(first) = enum_values.first() {
+            return Some(first.clone());
+        }
+    }
+    None
+}
 
-    // Replace environment variables in URL and body
-    let (url, body) = {
-        let env_vars = state.environment_vars.lock().unwrap();
-        let url = replace_variables(&request.url, &env_vars);
-        let body = request.body.as_ref().map(|b| replace_variables(b, &env_vars));
-        (url, body)
-    }; // env_vars is dropped here
-
-    // Create request builder
-    let method = reqwest::Method::from_bytes(request.method.as_bytes())
-        .map_err(|e| e.to_string())?;
-
-    let mut req_builder = client.request(method, &url);
-
-    // Handle multipart file upload
-    if let Some(files) = &request.files {
-        if !files.is_empty() {
-            let mut form = reqwest::multipart::Form::new();
-
-            // Add files
-            for file in files {
-                let data = base64::decode(&file.data).map_err(|e| e.to_string())?;
-                let part = reqwest::multipart::Part::bytes(data)
-                    .file_name(file.filename.clone())
-                    .mime_str(&file.content_type)
-                    .map_err(|e| e.to_string())?;
-                form = form.part(file.name.clone(), part);
+fn build_example_from_schema(doc: &Value, schema: &Value, depth: usize) -> Option<Value> {
+    if depth > 6 {
+        return None;
+    }
+    let resolved = resolve_ref(doc, schema, 0);
+    if let Some(example) = extract_schema_example(doc, resolved) {
+        return Some(example);
+    }
+    if let Some(one_of) = resolved.get("oneOf").and_then(|v| v.as_array()) {
+        for option in one_of {
+            if let Some(example) = build_example_from_schema(doc, option, depth + 1) {
+                return Some(example);
             }
+        }
+    }
+    if let Some(any_of) = resolved.get("anyOf").and_then(|v| v.as_array()) {
+        for option in any_of {
+            if let Some(example) = build_example_from_schema(doc, option, depth + 1) {
+                return Some(example);
+            }
+        }
+    }
+    let schema_type = resolved.get("type").and_then(|v| v.as_str());
+    if schema_type == Some("object") || resolved.get("properties").is_some() {
+        let mut obj = Map::new();
+        if let Some(props) = resolved.get("properties").and_then(|v| v.as_object()) {
+            for (name, prop_schema) in props {
+                if let Some(example) = build_example_from_schema(doc, prop_schema, depth + 1) {
+                    obj.insert(name.clone(), example);
+                }
+            }
+        }
+        return Some(Value::Object(obj));
+    }
+    if schema_type == Some("array") {
+        if let Some(items) = resolved.get("items") {
+            if let Some(example) = build_example_from_schema(doc, items, depth + 1) {
+                return Some(Value::Array(vec![example]));
+            }
+        }
+        return Some(Value::Array(vec![]));
+    }
+    if schema_type == Some("integer") {
+        return Some(Value::from(0));
+    }
+    if schema_type == Some("number") {
+        return Some(Value::from(0.0));
+    }
+    if schema_type == Some("boolean") {
+        return Some(Value::from(false));
+    }
+    if schema_type == Some("string") {
+        return Some(Value::from(""));
+    }
+    None
+}
 
-            // Add other form fields from body if present
-            if let Some(body_content) = &body {
-                if let Ok(json_body) = serde_json::from_str::<HashMap<String, serde_json::Value>>(body_content) {
-                    for (key, value) in json_body {
-                        if let Some(text) = value.as_str() {
-                            form = form.text(key, text.to_string());
+fn extract_parameter_example(doc: &Value, param: &Value) -> Option<Value> {
+    let resolved = resolve_ref(doc, param, 0);
+    if let Some(example) = resolved.get("example") {
+        if !example.is_null() {
+            return Some(example.clone());
+        }
+    }
+    if let Some(examples) = resolved.get("examples").and_then(|v| v.as_object()) {
+        for example in examples.values() {
+            if let Some(value) = example.get("value") {
+                if !value.is_null() {
+                    return Some(value.clone());
+                }
+            }
+        }
+    }
+    if let Some(schema) = resolved.get("schema") {
+        if let Some(example) = extract_schema_example(doc, schema) {
+            return Some(example);
+        }
+    }
+    None
+}
+
+fn extract_request_body_example(doc: &Value, request_body: &Value) -> Option<Value> {
+    let resolved = resolve_ref(doc, request_body, 0);
+    let content = resolved.get("content")?;
+    let json_content = content.get("application/json")?;
+    if let Some(example) = json_content.get("example") {
+        if !example.is_null() {
+            return Some(example.clone());
+        }
+    }
+    if let Some(examples) = json_content.get("examples").and_then(|v| v.as_object()) {
+        for example in examples.values() {
+            if let Some(value) = example.get("value") {
+                if !value.is_null() {
+                    return Some(value.clone());
+                }
+            }
+        }
+    }
+    if let Some(schema) = json_content.get("schema") {
+        if let Some(example) = build_example_from_schema(doc, schema, 0) {
+            return Some(example);
+        }
+    }
+    None
+}
+
+fn extract_request_body_description(doc: &Value, request_body: &Value) -> Option<String> {
+    let resolved = resolve_ref(doc, request_body, 0);
+    if let Some(desc) = resolved.get("description").and_then(|v| v.as_str()) {
+        return Some(desc.to_string());
+    }
+    if let Some(content) = resolved.get("content") {
+        if let Some(schema) = content
+            .get("application/json")
+            .and_then(|v| v.get("schema"))
+        {
+            let schema = resolve_ref(doc, schema, 0);
+            if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
+                return Some(desc.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn parse_openapi_internal(content: &str, url: &str, etag: Option<String>) -> Result<OpenApiCollection, String> {
+    let json: serde_json::Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
+    let mut groups: HashMap<String, Vec<Endpoint>> = HashMap::new();
+    let base_url = json["servers"][0]["url"].as_str().unwrap_or("").trim_end_matches('/');
+
+    if let Some(paths) = json["paths"].as_object() {
+        for (path, methods) in paths {
+            if let Some(methods_obj) = methods.as_object() {
+                let path_params = methods_obj.get("parameters").and_then(|v| v.as_array());
+                for (method, details) in methods_obj {
+                    if method == "parameters" { continue; }
+
+                    let mut params = Vec::new();
+                    let mut seen = std::collections::HashSet::new();
+                    let op_params = details.get("parameters").and_then(|v| v.as_array());
+                    let param_iter = path_params
+                        .into_iter()
+                        .flatten()
+                        .chain(op_params.into_iter().flatten());
+                    for p in param_iter {
+                        let resolved = resolve_ref(&json, p, 0);
+                        let name = resolved["name"].as_str().unwrap_or("").to_string();
+                        let in_type = resolved["in"].as_str().unwrap_or("query").to_string();
+                        let key = format!("{}:{}", in_type, name);
+                        if !seen.insert(key) {
+                            continue;
+                        }
+                        let description = resolved
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                resolved
+                                    .get("schema")
+                                    .and_then(|s| s.get("description"))
+                                    .and_then(|v| v.as_str())
+                            })
+                            .map(|s| s.to_string());
+                        params.push(Parameter {
+                            name,
+                            in_type,
+                            description,
+                            required: resolved["required"].as_bool().unwrap_or(false),
+                            example: extract_parameter_example(&json, resolved),
+                        });
+                    }
+
+                    let request_body = details.get("requestBody");
+                    let body_description = request_body
+                        .and_then(|body| extract_request_body_description(&json, body));
+                    let body_required = request_body
+                        .and_then(|body| resolve_ref(&json, body, 0).get("required"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let body_example = request_body
+                        .and_then(|body| extract_request_body_example(&json, body))
+                        .map(|value| value.to_string());
+
+                    let endpoint = Endpoint {
+                        method: method.to_uppercase(),
+                        path: format!("{}{}", base_url, path),
+                        summary: details["summary"].as_str().map(|s| s.to_string()),
+                        description: details["description"].as_str().map(|s| s.to_string()),
+                        parameters: params,
+                        body_example,
+                        body_description,
+                        body_required,
+                    };
+
+                    let tag = details["tags"][0].as_str().unwrap_or("Default").to_string();
+                    groups.entry(tag).or_insert(Vec::new()).push(endpoint);
+                }
+            }
+        }
+    }
+
+    let name = json["info"]["title"].as_str().unwrap_or(url).to_string();
+    Ok(OpenApiCollection {
+        name,
+        url: url.to_string(),
+        groups,
+        last_updated: Utc::now(),
+        etag,
+        sync_enabled: true,
+    })
+}
+
+#[command]
+async fn request(
+    method: String,
+    url: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+) -> Result<String, String> {
+    let client = Client::new();
+    let req_method = match method.to_uppercase().as_str() {
+        "GET" => reqwest::Method::GET,
+        "POST" => reqwest::Method::POST,
+        "PUT" => reqwest::Method::PUT,
+        "DELETE" => reqwest::Method::DELETE,
+        _ => return Err("Invalid method".into()),
+    };
+
+    let mut request_builder = client.request(req_method, &url);
+    for (key, value) in &headers {
+        request_builder = request_builder.header(key, value);
+    }
+    if let Some(b) = body {
+        if !b.is_empty() {
+            request_builder = request_builder.body(b);
+            if !headers.contains_key("Content-Type") {
+                request_builder = request_builder.header("Content-Type", "application/json");
+            }
+        }
+    }
+
+    let response = request_builder.send().await.map_err(|e| e.to_string())?;
+    let status = response.status();
+    let headers_map = response.headers().clone();
+    let text = response.text().await.map_err(|e| e.to_string())?;
+
+    let mut header_str = String::new();
+    for (k, v) in headers_map.iter() {
+        header_str.push_str(&format!("{}: {:?}\n", k, v));
+    }
+
+    Ok(format!("Status: {}\n\nHeaders:\n{}\n\nBody:\n{}", status, header_str, text))
+}
+
+#[command]
+async fn import_openapi(url: String, state: State<'_, AppState>) -> Result<OpenApiCollection, String> {
+    let client = Client::new();
+    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let etag = response.headers().get("etag").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    let content = response.text().await.map_err(|e| e.to_string())?;
+    
+    let collection = parse_openapi_internal(&content, &url, etag)?;
+    let mut cols = state.collections.lock().unwrap();
+    cols.insert(url, collection.clone());
+    Ok(collection)
+}
+
+#[command]
+async fn toggle_sync(url: String, enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let mut cols = state.collections.lock().unwrap();
+    if let Some(col) = cols.get_mut(&url) { col.sync_enabled = enabled; }
+    Ok(())
+}
+
+#[command]
+async fn download_file(url: String, save_path: String) -> Result<(), String> {
+    let response = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+    let mut file = File::create(save_path).await.map_err(|e| e.to_string())?;
+    let mut stream = response.bytes_stream();
+    while let Some(item) = stream.next().await {
+        let chunk = item.map_err(|e| e.to_string())?;
+        tokio::io::copy(&mut &chunk[..], &mut file).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+async fn background_update_checker(app_handle: tauri::AppHandle) {
+    loop {
+        sleep(Duration::from_secs(60)).await;
+        let state = app_handle.state::<AppState>();
+        let targets: Vec<(String, Option<String>)> = {
+            let cols = state.collections.lock().unwrap();
+            cols.values().filter(|c| c.sync_enabled).map(|c| (c.url.clone(), c.etag.clone())).collect()
+        };
+        let client = Client::new();
+        for (url, current_etag) in targets {
+            let mut req = client.get(&url);
+            if let Some(etag) = current_etag { req = req.header("If-None-Match", etag); }
+            if let Ok(resp) = req.send().await {
+                if resp.status() == reqwest::StatusCode::OK {
+                    let new_etag = resp.headers().get("etag").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+                    if let Ok(content) = resp.text().await {
+                        if let Ok(updated_col) = parse_openapi_internal(&content, &url, new_etag) {
+                            let mut cols = state.collections.lock().unwrap();
+                            cols.insert(url.clone(), updated_col.clone());
+                            app_handle.emit_all("collection-updated", updated_col).unwrap();
                         }
                     }
                 }
             }
-
-            req_builder = req_builder.multipart(form);
-        } else if let Some(body_content) = body {
-            // Regular body
-            for (key, value) in request.headers.iter() {
-                req_builder = req_builder.header(key, value);
-            }
-            req_builder = req_builder.body(body_content);
-        }
-    } else {
-        // No files, regular request
-        for (key, value) in request.headers.iter() {
-            req_builder = req_builder.header(key, value);
-        }
-        if let Some(body_content) = body {
-            req_builder = req_builder.body(body_content);
         }
     }
-
-    // Send request
-    let response = req_builder.send().await.map_err(|e| e.to_string())?;
-
-    let status = response.status().as_u16();
-
-    // Extract headers
-    let mut headers = HashMap::new();
-    for (key, value) in response.headers().iter() {
-        headers.insert(
-            key.to_string(),
-            value.to_str().unwrap_or("").to_string(),
-        );
-    }
-
-    // Get response body
-    let body = response.text().await.map_err(|e| e.to_string())?;
-
-    let duration = start.elapsed();
-
-    // Save to history
-    let history_item = HistoryItem {
-        id: None,
-        method: request.method.clone(),
-        url: url.clone(),
-        status,
-        timestamp: chrono::Utc::now().timestamp(),
-    };
-
-    state.history.lock().unwrap().push(history_item);
-
-    Ok(HttpResponse {
-        status,
-        headers,
-        body,
-        time_ms: duration.as_millis(),
-    })
 }
 
-// Import OpenAPI specification from URL
-#[tauri::command]
-async fn import_openapi(url: String) -> Result<Vec<OpenApiEndpoint>, String> {
-    let client = reqwest::Client::new();
-    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    let spec_text = response.text().await.map_err(|e| e.to_string())?;
-
-    // Try parsing as JSON first, then YAML
-    let openapi: openapiv3::OpenAPI = if spec_text.trim().starts_with('{') {
-        serde_json::from_str(&spec_text).map_err(|e| format!("Failed to parse JSON: {}", e))?
-    } else {
-        serde_yaml::from_str(&spec_text).map_err(|e| format!("Failed to parse YAML: {}", e))?
-    };
-
-    let mut endpoints = Vec::new();
-
-    // Extract paths and operations
-    for (path, path_item) in openapi.paths.paths.iter() {
-        if let openapiv3::ReferenceOr::Item(item) = path_item {
-            // GET
-            if let Some(op) = &item.get {
-                endpoints.push(OpenApiEndpoint {
-                    method: "GET".to_string(),
-                    path: path.clone(),
-                    summary: op.summary.clone(),
-                    description: op.description.clone(),
-                });
-            }
-            // POST
-            if let Some(op) = &item.post {
-                endpoints.push(OpenApiEndpoint {
-                    method: "POST".to_string(),
-                    path: path.clone(),
-                    summary: op.summary.clone(),
-                    description: op.description.clone(),
-                });
-            }
-            // PUT
-            if let Some(op) = &item.put {
-                endpoints.push(OpenApiEndpoint {
-                    method: "PUT".to_string(),
-                    path: path.clone(),
-                    summary: op.summary.clone(),
-                    description: op.description.clone(),
-                });
-            }
-            // PATCH
-            if let Some(op) = &item.patch {
-                endpoints.push(OpenApiEndpoint {
-                    method: "PATCH".to_string(),
-                    path: path.clone(),
-                    summary: op.summary.clone(),
-                    description: op.description.clone(),
-                });
-            }
-            // DELETE
-            if let Some(op) = &item.delete {
-                endpoints.push(OpenApiEndpoint {
-                    method: "DELETE".to_string(),
-                    path: path.clone(),
-                    summary: op.summary.clone(),
-                    description: op.description.clone(),
-                });
-            }
-        }
-    }
-
-    Ok(endpoints)
-}
-
-// Get request history
-#[tauri::command]
-fn get_history(state: State<'_, AppState>) -> Vec<HistoryItem> {
-    state.history.lock().unwrap().clone()
-}
-
-// Clear history
-#[tauri::command]
-fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
-    state.history.lock().unwrap().clear();
-    Ok(())
-}
-
-// Set environment variable
-#[tauri::command]
-fn set_env_var(key: String, value: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.environment_vars.lock().unwrap().insert(key, value);
-    Ok(())
-}
-
-// Get all environment variables
-#[tauri::command]
-fn get_env_vars(state: State<'_, AppState>) -> HashMap<String, String> {
-    state.environment_vars.lock().unwrap().clone()
-}
-
-// Delete environment variable
-#[tauri::command]
-fn delete_env_var(key: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.environment_vars.lock().unwrap().remove(&key);
-    Ok(())
-}
-
-// Helper function to replace {{variable}} with actual values
-fn replace_variables(text: &str, vars: &HashMap<String, String>) -> String {
-    let mut result = text.to_string();
-    for (key, value) in vars.iter() {
-        let placeholder = format!("{{{{{}}}}}", key);
-        result = result.replace(&placeholder, value);
-    }
-    result
-}
-
-fn main() {
-    let app_state = AppState {
-        history: Mutex::new(Vec::new()),
-        environment_vars: Mutex::new(HashMap::new()),
-    };
-
+#[tokio::main]
+async fn main() {
+    let state = AppState { collections: Arc::new(Mutex::new(HashMap::new())), };
     tauri::Builder::default()
-        .manage(app_state)
-        .invoke_handler(tauri::generate_handler![
-            send_request,
-            import_openapi,
-            get_history,
-            clear_history,
-            set_env_var,
-            get_env_vars,
-            delete_env_var,
-        ])
+        .manage(state)
+        .invoke_handler(tauri::generate_handler![request, download_file, import_openapi, toggle_sync])
+        .setup(|app| {
+            let handle = app.handle();
+            tokio::spawn(async move { background_update_checker(handle).await; });
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

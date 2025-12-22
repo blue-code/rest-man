@@ -1,0 +1,210 @@
+import { useEffect, useState } from "react";
+import type { Collection, Endpoint } from "../types";
+
+type SidebarProps = {
+  openApiUrl: string;
+  onOpenApiUrlChange: (value: string) => void;
+  onImport: () => void;
+  collections: Record<string, Collection>;
+  selectedEndpointKey: string | null;
+  onSelectEndpoint: (endpoint: Endpoint) => void;
+  isImporting: boolean;
+};
+
+function endpointKey(endpoint: Endpoint) {
+  return `${endpoint.method}:${endpoint.path}`;
+}
+
+function endpointLabel(endpoint: Endpoint) {
+  const hint = endpoint.summary || endpoint.description;
+  if (hint) {
+    return `요청: ${hint}`;
+  }
+  const pathName = endpoint.path.split("/").filter(Boolean).pop();
+  return `요청: ${pathName || "기본"}`;
+}
+
+export function Sidebar({
+  openApiUrl,
+  onOpenApiUrlChange,
+  onImport,
+  collections,
+  selectedEndpointKey,
+  onSelectEndpoint,
+  isImporting,
+}: SidebarProps) {
+  const collectionValues = Object.values(collections);
+  const hasCollections = collectionValues.length > 0;
+  const [expandedCollections, setExpandedCollections] = useState<
+    Record<string, boolean>
+  >({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
+    {}
+  );
+
+  useEffect(() => {
+    setExpandedCollections((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      Object.keys(collections).forEach((url) => {
+        if (next[url] === undefined) {
+          next[url] = true;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [collections]);
+
+  useEffect(() => {
+    setExpandedGroups((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      collectionValues.forEach((collection) => {
+        Object.keys(collection.groups).forEach((tag) => {
+          const key = `${collection.url}::${tag}`;
+          if (next[key] === undefined) {
+            next[key] = true;
+            changed = true;
+          }
+        });
+      });
+      return changed ? next : prev;
+    });
+  }, [collectionValues]);
+
+  function toggleCollection(url: string) {
+    setExpandedCollections((prev) => ({
+      ...prev,
+      [url]: !prev[url],
+    }));
+  }
+
+  function toggleGroup(groupKey: string) {
+    setExpandedGroups((prev) => ({
+      ...prev,
+      [groupKey]: !prev[groupKey],
+    }));
+  }
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar__header">
+        <div className="brand">
+          <div className="brand__name">RestMan</div>
+          <div className="brand__tagline">OpenAPI-driven request console</div>
+        </div>
+        <div className="import">
+          <label className="field-label" htmlFor="openapi-url">
+            OpenAPI 가져오기
+          </label>
+          <div className="import__row">
+            <input
+              id="openapi-url"
+              value={openApiUrl}
+              onChange={(event) => onOpenApiUrlChange(event.target.value)}
+              placeholder="https://api.example.com/openapi.json"
+            />
+            <button
+              type="button"
+              onClick={onImport}
+              disabled={isImporting || !openApiUrl.trim()}
+            >
+              {isImporting ? "가져오는 중..." : "가져오기"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="sidebar__content">
+        <div className="sidebar__section-title">컬렉션</div>
+        {!hasCollections && (
+          <div className="empty-state">
+            <div className="empty-state__title">아직 컬렉션이 없습니다</div>
+            <div className="empty-state__body">
+              OpenAPI JSON URL을 입력해 목록을 불러오세요.
+            </div>
+          </div>
+        )}
+        {collectionValues.map((collection) => (
+          <div key={collection.url} className="collection">
+            <button
+              type="button"
+              className="collection__toggle"
+              onClick={() => toggleCollection(collection.url)}
+              aria-expanded={Boolean(expandedCollections[collection.url])}
+            >
+              <span className="collection__title">{collection.name}</span>
+              <span
+                className={`chevron ${
+                  expandedCollections[collection.url] ? "chevron--open" : ""
+                }`}
+                aria-hidden="true"
+              >
+                ▾
+              </span>
+            </button>
+            {expandedCollections[collection.url] &&
+              Object.entries(collection.groups).map(([tag, endpoints]) => {
+                const groupKey = `${collection.url}::${tag}`;
+                const isGroupOpen = expandedGroups[groupKey];
+                return (
+                  <div key={tag} className="tag-group">
+                    <button
+                      type="button"
+                      className="tag-group__toggle"
+                      onClick={() => toggleGroup(groupKey)}
+                      aria-expanded={Boolean(isGroupOpen)}
+                    >
+                      <span className="tag-group__title">{tag}</span>
+                      <span
+                        className={`chevron ${
+                          isGroupOpen ? "chevron--open" : ""
+                        }`}
+                        aria-hidden="true"
+                      >
+                        ▾
+                      </span>
+                    </button>
+                    {isGroupOpen &&
+                      endpoints.map((endpoint) => {
+                        const key = endpointKey(endpoint);
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            className={`endpoint ${
+                              selectedEndpointKey === key
+                                ? "endpoint--active"
+                                : ""
+                            }`}
+                            onClick={() => onSelectEndpoint(endpoint)}
+                          >
+                            <span
+                              className={`method-pill method-pill--${endpoint.method}`}
+                            >
+                              {endpoint.method}
+                            </span>
+                            <span className="endpoint__text">
+                              <span className="endpoint__name">
+                                {endpointLabel(endpoint)}
+                              </span>
+                              <span
+                                className="endpoint__path"
+                                title={endpoint.path}
+                              >
+                                {endpoint.path}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                );
+              })}
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+}

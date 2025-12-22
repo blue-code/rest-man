@@ -1,24 +1,9 @@
 {
-  "name": "restman",
-  "version": "0.1.0",
-  "description": "A Postman-like API testing desktop application built with Rust and Tauri",
+  "name": "restman-root",
+  "private": true,
   "scripts": {
-    "dev": "cd webui && npm run dev",
-    "build": "cd webui && npm run build",
-    "tauri:dev": "npx tauri dev",
-    "tauri:build": "npx tauri build"
-  },
-  "keywords": [
-    "api",
-    "rest",
-    "client",
-    "postman",
-    "tauri",
-    "rust"
-  ],
-  "author": "RestMan Team",
-  "license": "MIT",
-  "devDependencies": {
-    "@tauri-apps/cli": "^1.5.6"
+    "tauri:dev": "webui\\node_modules\\.bin\\tauri.cmd dev",
+    "tauri:build": "webui\\node_modules\\.bin\\tauri.cmd build",
+    "install:webui": "npm install --prefix webui"
   }
 }
