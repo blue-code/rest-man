@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/api/dialog";
 import type { Endpoint, HttpMethod, Parameter } from "../types";
 
 type RequestPanelProps = {
@@ -16,6 +17,12 @@ type RequestPanelProps = {
   onParamChange: (name: string, value: string) => void;
   requestBody: string;
   onRequestBodyChange: (value: string) => void;
+  bodyType: string;
+  onBodyTypeChange: (value: string) => void;
+  formValues: Record<string, string>;
+  fileValues: Record<string, string[]>;
+  onFormValueChange: (name: string, value: string) => void;
+  onFileValuesChange: (name: string, paths: string[]) => void;
 };
 
 const methodOptions: HttpMethod[] = ["GET", "POST", "PUT", "DELETE"];
@@ -26,6 +33,15 @@ function hasBody(method: HttpMethod) {
 
 function buildParamLabel(param: Parameter) {
   return `${param.name}${param.required ? " *" : ""}`;
+}
+
+function formatFieldLabel(name: string, required?: boolean) {
+  return `${name}${required ? " *" : ""}`;
+}
+
+function formatFileName(path: string) {
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1] || path;
 }
 
 export function RequestPanel({
@@ -44,12 +60,38 @@ export function RequestPanel({
   onParamChange,
   requestBody,
   onRequestBodyChange,
+  bodyType,
+  onBodyTypeChange,
+  formValues,
+  fileValues,
+  onFormValueChange,
+  onFileValuesChange,
 }: RequestPanelProps) {
   const showBody = hasBody(method);
   const parameters = selectedEndpoint?.parameters ?? [];
   const bodyRequired = selectedEndpoint?.body_required;
   const bodyDescription = selectedEndpoint?.body_description;
+  const bodyMediaTypes = selectedEndpoint?.body_media_types ?? [];
+  const bodyFields = selectedEndpoint?.body_fields ?? [];
   const autoToggleDisabled = !selectedEndpoint;
+  const isFormBody =
+    bodyType === "multipart/form-data" ||
+    bodyType === "application/x-www-form-urlencoded";
+  const showBodyTypeSelect = bodyMediaTypes.length > 1;
+  const showBodyTypeLabel = bodyMediaTypes.length === 1;
+
+  async function handlePickFile(fieldName: string, allowMultiple: boolean) {
+    try {
+      const selection = await open({ multiple: allowMultiple });
+      if (!selection) {
+        return;
+      }
+      const paths = Array.isArray(selection) ? selection : [selection];
+      onFileValuesChange(fieldName, paths);
+    } catch {
+      return;
+    }
+  }
 
   return (
     <section className="panel panel--request">
@@ -156,18 +198,123 @@ export function RequestPanel({
 
           <div className={`card ${showBody ? "" : "card--disabled"}`}>
             <div className="card__header">
-              Body {bodyRequired ? <span className="pill">Required</span> : null}
+              <span>
+                Body {bodyRequired ? <span className="pill">Required</span> : null}
+              </span>
+              {showBodyTypeSelect ? (
+                <select
+                  className="body-type-select"
+                  value={bodyType}
+                  onChange={(event) => onBodyTypeChange(event.target.value)}
+                  disabled={!showBody}
+                  aria-label="Request body content type"
+                >
+                  {bodyMediaTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              ) : showBodyTypeLabel ? (
+                <span className="pill">{bodyMediaTypes[0]}</span>
+              ) : null}
             </div>
             {bodyDescription && (
               <div className="body-hint">{bodyDescription}</div>
             )}
             {showBody ? (
-              <textarea
-                className="json-editor"
-                value={requestBody}
-                onChange={(event) => onRequestBodyChange(event.target.value)}
-                placeholder='{ "id": 1, "name": "example" }'
-              />
+              isFormBody ? (
+                bodyFields.length === 0 ? (
+                  <div className="empty-state empty-state--compact">
+                    <div className="empty-state__title">No form fields</div>
+                    <div className="empty-state__body">
+                      OpenAPI does not define multipart/form fields for this
+                      request.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="param-list">
+                    {bodyFields.map((field) => {
+                      const fieldFiles = fileValues[field.name] || [];
+                      return (
+                        <div key={field.name} className="param-row">
+                          <div className="param-meta">
+                            <span className="param-name">
+                              <code>
+                                {formatFieldLabel(field.name, field.required)}
+                              </code>
+                            </span>
+                            <span className="param-type">
+                              {field.is_file ? "file" : "text"}
+                              {field.is_array ? "[]" : ""}
+                            </span>
+                          </div>
+                          {field.is_file ? (
+                            <div className="file-picker">
+                              <div className="file-picker__actions">
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  onClick={() =>
+                                    handlePickFile(field.name, field.is_array)
+                                  }
+                                >
+                                  파일 선택
+                                </button>
+                                {fieldFiles.length > 0 ? (
+                                  <button
+                                    type="button"
+                                    className="ghost"
+                                    onClick={() =>
+                                      onFileValuesChange(field.name, [])
+                                    }
+                                  >
+                                    비우기
+                                  </button>
+                                ) : null}
+                              </div>
+                              {fieldFiles.length > 0 ? (
+                                <div className="file-picker__list">
+                                  {fieldFiles.map((path) => (
+                                    <span key={path}>
+                                      {formatFileName(path)}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="file-picker__empty">
+                                  선택된 파일 없음
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <input
+                              value={formValues[field.name] || ""}
+                              onChange={(event) =>
+                                onFormValueChange(
+                                  field.name,
+                                  event.target.value
+                                )
+                              }
+                              placeholder="text"
+                            />
+                          )}
+                          <div className="param-desc">
+                            {field.description || "No description"}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
+              ) : (
+                <textarea
+                  className="json-editor"
+                  value={requestBody}
+                  onChange={(event) => onRequestBodyChange(event.target.value)}
+                  placeholder='{ "id": 1, "name": "example" }'
+                />
+              )
             ) : (
               <div className="empty-state empty-state--compact">
                 <div className="empty-state__title">No body for GET</div>

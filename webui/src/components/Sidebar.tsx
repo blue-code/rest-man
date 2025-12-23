@@ -10,6 +10,7 @@ type SidebarProps = {
   collections: Record<string, Collection>;
   selectedEndpointKey: string | null;
   onSelectEndpoint: (endpoint: Endpoint) => void;
+  onToggleCollectionSync: (url: string, enabled: boolean) => void;
   syncStatus: "idle" | "syncing" | "updated";
   lastSyncedAt: number | null;
   isImporting: boolean;
@@ -22,10 +23,18 @@ function endpointKey(endpoint: Endpoint) {
 function endpointLabel(endpoint: Endpoint) {
   const hint = endpoint.summary || endpoint.description;
   if (hint) {
-    return `요청: ${hint}`;
+    return hint;
   }
   const pathName = endpoint.path.split("/").filter(Boolean).pop();
-  return `요청: ${pathName || "기본"}`;
+  return pathName || "기본";
+}
+
+function endpointSortKey(endpoint: Endpoint) {
+  return (endpoint.summary || endpoint.description || endpoint.path).toLowerCase();
+}
+
+function sortByLabel(a: string, b: string) {
+  return a.localeCompare(b, "ko", { numeric: true, sensitivity: "base" });
 }
 
 function formatSyncLabel(
@@ -51,6 +60,7 @@ export function Sidebar({
   collections,
   selectedEndpointKey,
   onSelectEndpoint,
+  onToggleCollectionSync,
   syncStatus,
   lastSyncedAt,
   isImporting,
@@ -182,87 +192,107 @@ export function Sidebar({
         )}
         {collectionValues.map((collection) => (
           <div key={collection.url} className="collection">
-            <button
-              type="button"
-              className="collection__toggle"
-              onClick={() => toggleCollection(collection.url)}
-              aria-expanded={Boolean(expandedCollections[collection.url])}
-            >
-              <span className="collection__title">{collection.name}</span>
-              <span
-                className={`chevron ${
-                  expandedCollections[collection.url] ? "chevron--open" : ""
-                }`}
-                aria-hidden="true"
+            <div className="collection__header">
+              <button
+                type="button"
+                className="collection__toggle"
+                onClick={() => toggleCollection(collection.url)}
+                aria-expanded={Boolean(expandedCollections[collection.url])}
               >
-                ▾
-              </span>
-            </button>
+                <span className="collection__title">{collection.name}</span>
+                <span
+                  className={`chevron ${
+                    expandedCollections[collection.url] ? "chevron--open" : ""
+                  }`}
+                  aria-hidden="true"
+                >
+                  ▾
+                </span>
+              </button>
+              <label className="sync-toggle sync-toggle--compact">
+                <input
+                  type="checkbox"
+                  checked={collection.sync_enabled !== false}
+                  onChange={(event) =>
+                    onToggleCollectionSync(
+                      collection.url,
+                      event.target.checked
+                    )
+                  }
+                />
+                <span className="sync-toggle__label">동기화</span>
+              </label>
+            </div>
             {expandedCollections[collection.url] &&
-              Object.entries(collection.groups).map(([tag, endpoints]) => {
-                const groupKey = `${collection.url}::${tag}`;
-                const isGroupOpen = expandedGroups[groupKey];
-                return (
-                  <div key={tag} className="tag-group">
-                    <button
-                      type="button"
-                      className="tag-group__toggle"
-                      onClick={() => toggleGroup(groupKey)}
-                      aria-expanded={Boolean(isGroupOpen)}
-                    >
-                      <span className="tag-group__title">{tag}</span>
-                      <span
-                        className={`chevron ${
-                          isGroupOpen ? "chevron--open" : ""
-                        }`}
-                        aria-hidden="true"
+              Object.entries(collection.groups)
+                .sort(([tagA], [tagB]) => sortByLabel(tagA, tagB))
+                .map(([tag, endpoints]) => {
+                  const groupKey = `${collection.url}::${tag}`;
+                  const isGroupOpen = expandedGroups[groupKey];
+                  const sortedEndpoints = [...endpoints].sort((a, b) =>
+                    sortByLabel(endpointSortKey(a), endpointSortKey(b))
+                  );
+                  return (
+                    <div key={tag} className="tag-group">
+                      <button
+                        type="button"
+                        className="tag-group__toggle"
+                        onClick={() => toggleGroup(groupKey)}
+                        aria-expanded={Boolean(isGroupOpen)}
                       >
-                        ▾
-                      </span>
-                    </button>
-                    {isGroupOpen &&
-                      endpoints.map((endpoint) => {
-                        const key = endpointKey(endpoint);
-                        return (
-                          <div
-                            key={key}
-                            role="button"
-                            tabIndex={0}
-                            className={`endpoint ${
-                              selectedEndpointKey === key
-                                ? "endpoint--active"
-                                : ""
-                            }`}
-                            onClick={() => onSelectEndpoint(endpoint)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
-                                onSelectEndpoint(endpoint);
-                              }
-                            }}
-                          >
-                            <span
-                              className={`method-pill method-pill--${endpoint.method}`}
+                        <span className="tag-group__title">{tag}</span>
+                        <span
+                          className={`chevron ${
+                            isGroupOpen ? "chevron--open" : ""
+                          }`}
+                          aria-hidden="true"
+                        >
+                          ▾
+                        </span>
+                      </button>
+                      {isGroupOpen &&
+                        sortedEndpoints.map((endpoint) => {
+                          const key = endpointKey(endpoint);
+                          return (
+                            <div
+                              key={key}
+                              role="button"
+                              tabIndex={0}
+                              className={`endpoint ${
+                                selectedEndpointKey === key
+                                  ? "endpoint--active"
+                                  : ""
+                              }`}
+                              onClick={() => onSelectEndpoint(endpoint)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  onSelectEndpoint(endpoint);
+                                }
+                              }}
                             >
-                              {endpoint.method}
-                            </span>
-                            <span className="endpoint__text">
-                              <span className="endpoint__name">
-                                {endpointLabel(endpoint)}
-                              </span>
                               <span
-                                className="endpoint__path"
-                                title={endpoint.path}
+                                className={`method-pill method-pill--${endpoint.method}`}
                               >
-                                {endpoint.path}
+                                {endpoint.method}
                               </span>
-                            </span>
-                          </div>
-                        );
-                      })}
-                  </div>
-                );
-              })}
+                              <span className="endpoint__text">
+                                <span className="endpoint__name">
+                                  {endpointLabel(endpoint)}
+                                </span>
+                                <span
+                                  className="endpoint__path"
+                                  title={endpoint.path}
+                                >
+                                  {endpoint.path}
+                                </span>
+                              </span>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  );
+                })}
           </div>
         ))}
       </div>

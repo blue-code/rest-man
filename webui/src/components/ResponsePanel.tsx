@@ -95,6 +95,23 @@ function formatTimestamp(timestamp: number) {
   return new Date(timestamp).toLocaleString();
 }
 
+function hasRequestBody(entry: HistoryEntry) {
+  if (entry.body && entry.body.trim().length > 0) {
+    return true;
+  }
+  if (entry.form_values) {
+    if (Object.values(entry.form_values).some((value) => value)) {
+      return true;
+    }
+  }
+  if (entry.file_values) {
+    if (Object.values(entry.file_values).some((paths) => paths.length > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function ResponsePanel({
   response,
   isSending,
@@ -204,7 +221,10 @@ export function ResponsePanel({
                       <button
                         type="button"
                         className="ghost"
-                        onClick={() => onPreviewHistory(entry)}
+                        onClick={() => {
+                          setActiveTab("response");
+                          onPreviewHistory(entry);
+                        }}
                       >
                         보기
                       </button>
@@ -221,7 +241,7 @@ export function ResponsePanel({
                     <div className="history-item__row">
                       <span className="history-item__label">요청 본문</span>
                       <span className="history-item__value">
-                        {entry.body ? "있음" : "없음"}
+                        {hasRequestBody(entry) ? "있음" : "없음"}
                       </span>
                     </div>
                     <div className="history-item__row">

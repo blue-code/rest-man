@@ -5,13 +5,27 @@ import { RequestPanel } from "./components/RequestPanel";
 import { ResponsePanel } from "./components/ResponsePanel";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
-import type { Collection, Endpoint, HistoryEntry, HttpMethod } from "./types";
+import type {
+  BodyField,
+  Collection,
+  Endpoint,
+  HistoryEntry,
+  HttpMethod,
+} from "./types";
 import "./App.css";
 
 type RequestDraft = {
   params: Record<string, string>;
   body: string;
+  bodyType: string;
+  formValues: Record<string, string>;
+  fileValues: Record<string, string[]>;
 };
+
+const formBodyTypes = new Set([
+  "multipart/form-data",
+  "application/x-www-form-urlencoded",
+]);
 
 const historyStorageKey = "restman.history";
 const openApiHistoryKey = "restman.openapiHistory";
@@ -24,6 +38,39 @@ const syncResetDelayMs = 3500;
 
 function endpointKey(endpoint: Endpoint) {
   return `${endpoint.method}:${endpoint.path}`;
+}
+
+function isFormBodyType(bodyType: string) {
+  return formBodyTypes.has(bodyType);
+}
+
+function defaultBodyType(endpoint: Endpoint | null) {
+  if (!endpoint?.body_media_types || endpoint.body_media_types.length === 0) {
+    return "application/json";
+  }
+  if (endpoint.body_media_types.includes("multipart/form-data")) {
+    return "multipart/form-data";
+  }
+  if (endpoint.body_media_types.includes("application/x-www-form-urlencoded")) {
+    return "application/x-www-form-urlencoded";
+  }
+  return endpoint.body_media_types[0];
+}
+
+function buildFormDefaults(fields: BodyField[] | undefined) {
+  const formValues: Record<string, string> = {};
+  const fileValues: Record<string, string[]> = {};
+  if (!fields) {
+    return { formValues, fileValues };
+  }
+  fields.forEach((field) => {
+    if (field.is_file) {
+      fileValues[field.name] = [];
+    } else {
+      formValues[field.name] = "";
+    }
+  });
+  return { formValues, fileValues };
 }
 
 function formatExample(example?: unknown) {
@@ -59,6 +106,9 @@ function App() {
   const [url, setUrl] = useState("");
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
   const [requestBody, setRequestBody] = useState("");
+  const [bodyType, setBodyType] = useState("application/json");
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const [fileValues, setFileValues] = useState<Record<string, string[]>>({});
   const [response, setResponse] = useState("");
   const [statusMessage, setStatusMessage] = useState("Ready");
   const [isImporting, setIsImporting] = useState(false);
@@ -85,6 +135,13 @@ function App() {
   const selectedEndpointKey = selectedEndpoint
     ? endpointKey(selectedEndpoint)
     : null;
+  const visibleHistory = selectedEndpoint
+    ? history.filter(
+        (entry) =>
+          entry.method === selectedEndpoint.method &&
+          entry.url === selectedEndpoint.path
+      )
+    : history;
 
   useEffect(() => {
     const unlisten = listen<Collection>("collection-updated", (event) => {
@@ -231,15 +288,23 @@ function App() {
     endpoint.parameters.forEach((param) => {
       params[param.name] = formatExample(param.example);
     });
+    const { formValues: nextFormValues, fileValues: nextFileValues } =
+      buildFormDefaults(endpoint.body_fields);
     return {
       params,
       body: formatBodyExample(endpoint.body_example),
+      bodyType: defaultBodyType(endpoint),
+      formValues: nextFormValues,
+      fileValues: nextFileValues,
     };
   }
 
   function updateDraftForSelected(
     nextParams: Record<string, string>,
-    nextBody: string
+    nextBody: string,
+    nextBodyType: string,
+    nextFormValues: Record<string, string>,
+    nextFileValues: Record<string, string[]>
   ) {
     if (!selectedEndpoint) {
       return;
@@ -250,6 +315,9 @@ function App() {
       [key]: {
         params: nextParams,
         body: nextBody,
+        bodyType: nextBodyType,
+        formValues: nextFormValues,
+        fileValues: nextFileValues,
       },
     }));
   }
@@ -297,12 +365,27 @@ function App() {
   function selectEndpoint(endpoint: Endpoint) {
     const key = endpointKey(endpoint);
     const draft = endpointDrafts[key] || buildDraftFromEndpoint(endpoint);
+    const resolvedBodyType =
+      endpoint.body_media_types?.includes(draft.bodyType) || !endpoint.body_media_types
+        ? draft.bodyType
+        : defaultBodyType(endpoint);
+    const { formValues: defaultFormValues, fileValues: defaultFileValues } =
+      buildFormDefaults(endpoint.body_fields);
+    const nextDraft: RequestDraft = {
+      ...draft,
+      bodyType: resolvedBodyType,
+      formValues: draft.formValues || defaultFormValues,
+      fileValues: draft.fileValues || defaultFileValues,
+    };
     setSelectedEndpoint(endpoint);
     setMethod(endpoint.method);
     setUrl(endpoint.path);
     setParamValues(draft.params);
     setRequestBody(draft.body);
-    setEndpointDrafts((prev) => (prev[key] ? prev : { ...prev, [key]: draft }));
+    setBodyType(resolvedBodyType);
+    setFormValues(nextDraft.formValues);
+    setFileValues(nextDraft.fileValues);
+    setEndpointDrafts((prev) => ({ ...prev, [key]: nextDraft }));
     setResponse("");
     showMessage(`Loaded: ${endpoint.method} ${endpoint.path}`);
   }
@@ -326,11 +409,29 @@ function App() {
 
   function reuseHistory(entry: HistoryEntry) {
     const matchedEndpoint = findEndpointByRequest(entry);
+    const requestedBodyType =
+      entry.body_type ||
+      (matchedEndpoint ? defaultBodyType(matchedEndpoint) : "application/json");
+    const nextBodyType =
+      matchedEndpoint?.body_media_types &&
+      matchedEndpoint.body_media_types.length > 0 &&
+      !matchedEndpoint.body_media_types.includes(requestedBodyType)
+        ? defaultBodyType(matchedEndpoint)
+        : requestedBodyType;
     setSelectedEndpoint(matchedEndpoint);
     setMethod(entry.method);
     setUrl(matchedEndpoint ? entry.url : entry.resolved_url || entry.url);
     setParamValues(entry.params);
-    setRequestBody(entry.body);
+    setBodyType(nextBodyType);
+    if (isFormBodyType(nextBodyType)) {
+      setFormValues(entry.form_values || {});
+      setFileValues(entry.file_values || {});
+      setRequestBody("");
+    } else {
+      setFormValues({});
+      setFileValues({});
+      setRequestBody(entry.body);
+    }
     setResponse(entry.response);
     showMessage("히스토리에서 요청을 불러왔습니다.");
   }
@@ -345,7 +446,10 @@ function App() {
     methodInput: HttpMethod,
     urlInput: string,
     params: Record<string, string>,
-    bodyInput: string
+    bodyInput: string,
+    bodyTypeInput: string,
+    formValuesInput: Record<string, string>,
+    fileValuesInput: Record<string, string[]>
   ) {
     let finalUrl = urlInput;
     const headers: Record<string, string> = {};
@@ -374,12 +478,52 @@ function App() {
       finalUrl += (finalUrl.includes("?") ? "&" : "?") + queryString;
     }
 
-    const body =
-      methodInput !== "GET" && bodyInput.trim().length > 0
-        ? bodyInput
-        : null;
+    const hasHeader = (name: string) =>
+      Object.keys(headers).some(
+        (key) => key.toLowerCase() === name.toLowerCase()
+      );
+    const isFormBody = isFormBodyType(bodyTypeInput);
+    const allowBody = methodInput !== "GET";
+    let body: string | null = null;
+    let multipart: {
+      fields: Record<string, string>;
+      files: Array<{ name: string; paths: string[] }>;
+    } | null = null;
 
-    return { finalUrl, headers, body };
+    if (allowBody) {
+      if (bodyTypeInput === "multipart/form-data") {
+        const fields = Object.fromEntries(
+          Object.entries(formValuesInput).filter(([, value]) => value)
+        );
+        const files = Object.entries(fileValuesInput)
+          .map(([name, paths]) => ({
+            name,
+            paths: paths.filter((path) => path),
+          }))
+          .filter((entry) => entry.paths.length > 0);
+        multipart = { fields, files };
+      } else if (bodyTypeInput === "application/x-www-form-urlencoded") {
+        const formParams = new URLSearchParams();
+        Object.entries(formValuesInput).forEach(([key, value]) => {
+          if (value) {
+            formParams.append(key, value);
+          }
+        });
+        const encoded = formParams.toString();
+        body = encoded.length > 0 ? encoded : null;
+        if (body && !hasHeader("Content-Type")) {
+          headers["Content-Type"] = "application/x-www-form-urlencoded";
+        }
+      } else if (!isFormBody) {
+        const trimmed = bodyInput.trim();
+        body = trimmed.length > 0 ? bodyInput : null;
+        if (body && bodyTypeInput && !hasHeader("Content-Type")) {
+          headers["Content-Type"] = bodyTypeInput;
+        }
+      }
+    }
+
+    return { finalUrl, headers, body, multipart };
   }
 
   async function runBackgroundRequest(endpoint: Endpoint) {
@@ -389,12 +533,15 @@ function App() {
     }
     autoRequestInFlightRef.current[key] = true;
     const draft = draftsRef.current[key] || buildDraftFromEndpoint(endpoint);
-    const { finalUrl, headers, body } = buildRequestPayload(
+    const { finalUrl, headers, body, multipart } = buildRequestPayload(
       endpoint,
       endpoint.method,
       endpoint.path,
       draft.params,
-      draft.body
+      draft.body,
+      draft.bodyType,
+      draft.formValues,
+      draft.fileValues
     );
     try {
       const res: string = await invoke("request", {
@@ -402,6 +549,7 @@ function App() {
         url: finalUrl,
         headers,
         body,
+        multipart,
       });
       addHistoryEntry({
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -410,7 +558,10 @@ function App() {
         url: endpoint.path,
         resolved_url: finalUrl,
         params: draft.params,
-        body: draft.body,
+        body: isFormBodyType(draft.bodyType) ? "" : draft.body,
+        body_type: draft.bodyType,
+        form_values: isFormBodyType(draft.bodyType) ? draft.formValues : undefined,
+        file_values: isFormBodyType(draft.bodyType) ? draft.fileValues : undefined,
         response: res,
       });
     } catch (error) {
@@ -421,7 +572,10 @@ function App() {
         url: endpoint.path,
         resolved_url: finalUrl,
         params: draft.params,
-        body: draft.body,
+        body: isFormBodyType(draft.bodyType) ? "" : draft.body,
+        body_type: draft.bodyType,
+        form_values: isFormBodyType(draft.bodyType) ? draft.formValues : undefined,
+        file_values: isFormBodyType(draft.bodyType) ? draft.fileValues : undefined,
         response: `Error: ${String(error)}`,
       });
     } finally {
@@ -438,18 +592,24 @@ function App() {
     }
     const paramSnapshot = { ...paramValues };
     const bodySnapshot = requestBody;
+    const bodyTypeSnapshot = bodyType;
+    const formSnapshot = { ...formValues };
+    const fileSnapshot = { ...fileValues };
     const urlSnapshot = trimmedUrl;
     setIsSending(true);
     setResponse("Sending request...");
     let finalResponse = "";
     let resolvedUrl = trimmedUrl;
     try {
-      const { finalUrl, headers, body } = buildRequestPayload(
+      const { finalUrl, headers, body, multipart } = buildRequestPayload(
         selectedEndpoint,
         method,
         trimmedUrl,
         paramSnapshot,
-        bodySnapshot
+        bodySnapshot,
+        bodyTypeSnapshot,
+        formSnapshot,
+        fileSnapshot
       );
       resolvedUrl = finalUrl;
       const res: string = await invoke("request", {
@@ -457,6 +617,7 @@ function App() {
         url: finalUrl,
         headers,
         body,
+        multipart,
       });
       finalResponse = res;
       setResponse(res);
@@ -475,7 +636,14 @@ function App() {
           url: urlSnapshot,
           resolved_url: resolvedUrl,
           params: paramSnapshot,
-          body: bodySnapshot,
+          body: isFormBodyType(bodyTypeSnapshot) ? "" : bodySnapshot,
+          body_type: bodyTypeSnapshot,
+          form_values: isFormBodyType(bodyTypeSnapshot)
+            ? formSnapshot
+            : undefined,
+          file_values: isFormBodyType(bodyTypeSnapshot)
+            ? fileSnapshot
+            : undefined,
           response: finalResponse,
         });
       }
@@ -508,6 +676,31 @@ function App() {
         collections={collections}
         selectedEndpointKey={selectedEndpointKey}
         onSelectEndpoint={selectEndpoint}
+        onToggleCollectionSync={async (url, enabled) => {
+          try {
+            await invoke("toggle_sync", { url, enabled });
+            setCollections((prev) => {
+              const collection = prev[url];
+              if (!collection) {
+                return prev;
+              }
+              return {
+                ...prev,
+                [url]: {
+                  ...collection,
+                  sync_enabled: enabled,
+                },
+              };
+            });
+            showMessage(
+              enabled
+                ? "OpenAPI 동기화를 켰습니다."
+                : "OpenAPI 동기화를 껐습니다."
+            );
+          } catch (error) {
+            showMessage(`동기화 설정 실패: ${String(error)}`);
+          }
+        }}
         syncStatus={syncStatus}
         lastSyncedAt={lastSyncedAt}
         isImporting={isImporting}
@@ -537,20 +730,71 @@ function App() {
           onParamChange={(name, value) =>
             setParamValues((prev) => {
               const next = { ...prev, [name]: value };
-              updateDraftForSelected(next, requestBody);
+              updateDraftForSelected(
+                next,
+                requestBody,
+                bodyType,
+                formValues,
+                fileValues
+              );
               return next;
             })
           }
           requestBody={requestBody}
           onRequestBodyChange={(value) => {
             setRequestBody(value);
-            updateDraftForSelected(paramValues, value);
+            updateDraftForSelected(
+              paramValues,
+              value,
+              bodyType,
+              formValues,
+              fileValues
+            );
+          }}
+          bodyType={bodyType}
+          onBodyTypeChange={(value) => {
+            setBodyType(value);
+            updateDraftForSelected(
+              paramValues,
+              requestBody,
+              value,
+              formValues,
+              fileValues
+            );
+          }}
+          formValues={formValues}
+          fileValues={fileValues}
+          onFormValueChange={(name, value) => {
+            setFormValues((prev) => {
+              const next = { ...prev, [name]: value };
+              updateDraftForSelected(
+                paramValues,
+                requestBody,
+                bodyType,
+                next,
+                fileValues
+              );
+              return next;
+            });
+          }}
+          onFileValuesChange={(name, paths) => {
+            setFileValues((prev) => {
+              const next = { ...prev, [name]: paths };
+              updateDraftForSelected(
+                paramValues,
+                requestBody,
+                bodyType,
+                formValues,
+                next
+              );
+              return next;
+            });
           }}
         />
         <ResponsePanel
           response={response}
           isSending={isSending}
-          history={history}
+          history={visibleHistory}
           onReuseHistory={reuseHistory}
           onPreviewHistory={previewHistory}
         />

@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use tokio::fs::File;
 use futures_util::StreamExt;
 use serde_json::{Map, Value};
+use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Parameter {
@@ -21,6 +22,15 @@ struct Parameter {
     description: Option<String>,
     required: bool,
     example: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct BodyField {
+    name: String,
+    description: Option<String>,
+    required: bool,
+    is_file: bool,
+    is_array: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -33,6 +43,9 @@ struct Endpoint {
     body_example: Option<String>,
     body_description: Option<String>,
     body_required: bool,
+    body_media_types: Vec<String>,
+    body_fields: Vec<BodyField>,
+    body_fields_type: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -48,6 +61,18 @@ struct OpenApiCollection {
 struct AppState {
     collections: Arc<Mutex<HashMap<String, OpenApiCollection>>>,
     client: Client,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct MultipartFile {
+    name: String,
+    paths: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct MultipartPayload {
+    fields: HashMap<String, String>,
+    files: Vec<MultipartFile>,
 }
 
 fn resolve_ref<'a>(doc: &'a Value, value: &'a Value, depth: usize) -> &'a Value {
@@ -208,6 +233,77 @@ fn extract_request_body_description(doc: &Value, request_body: &Value) -> Option
     None
 }
 
+fn extract_request_body_media_types(doc: &Value, request_body: &Value) -> Vec<String> {
+    let resolved = resolve_ref(doc, request_body, 0);
+    let content = match resolved.get("content").and_then(|v| v.as_object()) {
+        Some(content) => content,
+        None => return Vec::new(),
+    };
+    content.keys().cloned().collect()
+}
+
+fn is_binary_schema(doc: &Value, schema: &Value) -> bool {
+    let resolved = resolve_ref(doc, schema, 0);
+    let schema_type = resolved.get("type").and_then(|v| v.as_str());
+    let format = resolved.get("format").and_then(|v| v.as_str());
+    schema_type == Some("string") && matches!(format, Some("binary") | Some("base64"))
+}
+
+fn extract_form_fields(doc: &Value, request_body: &Value, content_type: &str) -> Vec<BodyField> {
+    let resolved = resolve_ref(doc, request_body, 0);
+    let schema = match resolved
+        .get("content")
+        .and_then(|v| v.get(content_type))
+        .and_then(|v| v.get("schema"))
+    {
+        Some(schema) => resolve_ref(doc, schema, 0),
+        None => return Vec::new(),
+    };
+    let required_fields: std::collections::HashSet<String> = schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let props = match schema.get("properties").and_then(|v| v.as_object()) {
+        Some(props) => props,
+        None => return Vec::new(),
+    };
+
+    let mut fields = Vec::new();
+    for (name, prop_schema) in props {
+        let resolved_prop = resolve_ref(doc, prop_schema, 0);
+        let description = resolved_prop
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let mut is_file = is_binary_schema(doc, resolved_prop);
+        let mut is_array = false;
+        if !is_file {
+            if resolved_prop.get("type").and_then(|v| v.as_str()) == Some("array") {
+                if let Some(items) = resolved_prop.get("items") {
+                    if is_binary_schema(doc, items) {
+                        is_file = true;
+                        is_array = true;
+                    }
+                }
+            }
+        }
+        fields.push(BodyField {
+            name: name.clone(),
+            description,
+            required: required_fields.contains(name),
+            is_file,
+            is_array,
+        });
+    }
+    fields
+}
+
 fn parse_openapi_internal(content: &str, url: &str, etag: Option<String>) -> Result<OpenApiCollection, String> {
     let json: serde_json::Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
     let mut groups: HashMap<String, Vec<Endpoint>> = HashMap::new();
@@ -264,6 +360,27 @@ fn parse_openapi_internal(content: &str, url: &str, etag: Option<String>) -> Res
                     let body_example = request_body
                         .and_then(|body| extract_request_body_example(&json, body))
                         .map(|value| value.to_string());
+                    let body_media_types = request_body
+                        .map(|body| extract_request_body_media_types(&json, body))
+                        .unwrap_or_default();
+                    let mut body_fields = Vec::new();
+                    let mut body_fields_type = None;
+                    if let Some(body) = request_body {
+                        if body_media_types.iter().any(|t| t == "multipart/form-data") {
+                            body_fields = extract_form_fields(&json, body, "multipart/form-data");
+                            body_fields_type = Some("multipart/form-data".to_string());
+                        } else if body_media_types
+                            .iter()
+                            .any(|t| t == "application/x-www-form-urlencoded")
+                        {
+                            body_fields = extract_form_fields(
+                                &json,
+                                body,
+                                "application/x-www-form-urlencoded",
+                            );
+                            body_fields_type = Some("application/x-www-form-urlencoded".to_string());
+                        }
+                    }
 
                     let endpoint = Endpoint {
                         method: method.to_uppercase(),
@@ -274,6 +391,9 @@ fn parse_openapi_internal(content: &str, url: &str, etag: Option<String>) -> Res
                         body_example,
                         body_description,
                         body_required,
+                        body_media_types,
+                        body_fields,
+                        body_fields_type,
                     };
 
                     let tag = details["tags"][0].as_str().unwrap_or("Default").to_string();
@@ -300,6 +420,7 @@ async fn request(
     url: String,
     headers: HashMap<String, String>,
     body: Option<String>,
+    multipart: Option<MultipartPayload>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let client = state.client.clone();
@@ -312,13 +433,45 @@ async fn request(
     };
 
     let mut request_builder = client.request(req_method, &url);
-    for (key, value) in &headers {
+    let mut final_headers = headers;
+    if multipart.is_some() {
+        final_headers.retain(|key, _| !key.eq_ignore_ascii_case("content-type"));
+    }
+    for (key, value) in &final_headers {
         request_builder = request_builder.header(key, value);
     }
-    if let Some(b) = body {
+    if let Some(payload) = multipart {
+        let mut form = reqwest::multipart::Form::new();
+        for (key, value) in payload.fields {
+            if !value.is_empty() {
+                form = form.text(key, value);
+            }
+        }
+        for file in payload.files {
+            for path in file.paths {
+                if path.is_empty() {
+                    continue;
+                }
+                let filename = Path::new(&path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                let file_handle = File::open(&path).await.map_err(|e| e.to_string())?;
+                let length = file_handle.metadata().await.map_err(|e| e.to_string())?.len();
+                let part = reqwest::multipart::Part::stream_with_length(file_handle, length)
+                    .file_name(filename);
+                form = form.part(file.name.clone(), part);
+            }
+        }
+        request_builder = request_builder.multipart(form);
+    } else if let Some(b) = body {
         if !b.is_empty() {
             request_builder = request_builder.body(b);
-            if !headers.contains_key("Content-Type") {
+            if !final_headers
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("content-type"))
+            {
                 request_builder = request_builder.header("Content-Type", "application/json");
             }
         }
