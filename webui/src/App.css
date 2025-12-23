@@ -65,15 +65,37 @@
   color: var(--ink);
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand__logo {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 8px rgba(0, 255, 255, 0.4));
+}
+
+.brand__content {
+  display: flex;
+  flex-direction: column;
+}
+
 .brand__name {
   font-size: 1.4rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #00ffff, #ff00ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .brand__tagline {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 0.75rem;
 }
 
 .import {
@@ -648,7 +670,7 @@
   border: 1px solid var(--outline);
 }
 
-.response-headers > div {
+.response-headers>div {
   display: grid;
   grid-template-columns: 1fr 2fr;
   gap: 8px;
@@ -786,6 +808,7 @@
     opacity: 0;
     transform: translateY(10px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -796,9 +819,11 @@
   0% {
     transform: scale(1);
   }
+
   50% {
     transform: scale(1.05);
   }
+
   100% {
     transform: scale(1);
   }
@@ -813,7 +838,7 @@
     grid-template-columns: 1fr;
   }
 
-  .response-headers > div {
+  .response-headers>div {
     grid-template-columns: 1fr;
   }
 

@@ -128,8 +128,8 @@ export function Sidebar({
               syncStatus === "syncing"
                 ? "sync-dot sync-dot--syncing"
                 : syncStatus === "updated"
-                ? "sync-dot sync-dot--updated"
-                : "sync-dot"
+                  ? "sync-dot sync-dot--updated"
+                  : "sync-dot"
             }
           />
           <span className="sync-text">
@@ -137,8 +137,11 @@ export function Sidebar({
           </span>
         </div>
         <div className="brand">
-          <div className="brand__name">RestMan</div>
-          <div className="brand__tagline">OpenAPI-driven request console</div>
+          <img src="/logo.png" alt="RestMan Logo" className="brand__logo" />
+          <div className="brand__content">
+            <div className="brand__name">RestMan</div>
+            <div className="brand__tagline">OpenAPI-driven request console</div>
+          </div>
         </div>
         <div className="import">
           <label className="field-label" htmlFor="openapi-url">
@@ -201,9 +204,8 @@ export function Sidebar({
               >
                 <span className="collection__title">{collection.name}</span>
                 <span
-                  className={`chevron ${
-                    expandedCollections[collection.url] ? "chevron--open" : ""
-                  }`}
+                  className={`chevron ${expandedCollections[collection.url] ? "chevron--open" : ""
+                    }`}
                   aria-hidden="true"
                 >
                   ▾
@@ -242,9 +244,8 @@ export function Sidebar({
                       >
                         <span className="tag-group__title">{tag}</span>
                         <span
-                          className={`chevron ${
-                            isGroupOpen ? "chevron--open" : ""
-                          }`}
+                          className={`chevron ${isGroupOpen ? "chevron--open" : ""
+                            }`}
                           aria-hidden="true"
                         >
                           ▾
@@ -258,11 +259,10 @@ export function Sidebar({
                               key={key}
                               role="button"
                               tabIndex={0}
-                              className={`endpoint ${
-                                selectedEndpointKey === key
+                              className={`endpoint ${selectedEndpointKey === key
                                   ? "endpoint--active"
                                   : ""
-                              }`}
+                                }`}
                               onClick={() => onSelectEndpoint(endpoint)}
                               onKeyDown={(event) => {
                                 if (event.key === "Enter" || event.key === " ") {
