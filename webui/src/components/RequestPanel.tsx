@@ -80,6 +80,10 @@ export function RequestPanel({
   const showBodyTypeSelect = bodyMediaTypes.length > 1;
   const showBodyTypeLabel = bodyMediaTypes.length === 1;
   const hasParameters = parameters.length > 0;
+  const summaryText = selectedEndpoint
+    ? selectedEndpoint.summary || "Loaded from collection"
+    : "Select an endpoint or type a URL";
+  const descriptionText = selectedEndpoint?.description;
   const hasBodyDefinition = Boolean(
     bodyRequired ||
       bodyDescription ||
@@ -109,13 +113,10 @@ export function RequestPanel({
       <div className="panel__header panel__header--split">
         <div>
           <div className="panel__title">Request</div>
-          <div className="panel__hint">
-            {selectedEndpoint
-              ? selectedEndpoint.summary ||
-                selectedEndpoint.description ||
-                "Loaded from collection"
-              : "Select an endpoint or type a URL"}
-          </div>
+          <div className="panel__hint">{summaryText}</div>
+          {descriptionText ? (
+            <div className="panel__desc">{descriptionText}</div>
+          ) : null}
         </div>
         <div className="panel__actions">
           <label className="sync-toggle">
