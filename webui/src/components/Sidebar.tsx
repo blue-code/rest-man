@@ -9,7 +9,7 @@ type SidebarProps = {
   onSelectOpenApiHistory: (url: string) => void;
   collections: Record<string, Collection>;
   selectedEndpointKey: string | null;
-  onSelectEndpoint: (endpoint: Endpoint) => void;
+  onSelectEndpoint: (endpoint: Endpoint, collectionUrl: string) => void;
   onToggleCollectionSync: (url: string, enabled: boolean) => void;
   syncStatus: "idle" | "syncing" | "updated";
   lastSyncedAt: number | null;
@@ -31,6 +31,18 @@ function endpointLabel(endpoint: Endpoint) {
 
 function endpointSortKey(endpoint: Endpoint) {
   return (endpoint.summary || endpoint.description || endpoint.path).toLowerCase();
+}
+
+function formatEndpointPath(path: string) {
+  if (!/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  try {
+    const parsed = new URL(path);
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return path;
+  }
 }
 
 function sortByLabel(a: string, b: string) {
@@ -263,11 +275,13 @@ export function Sidebar({
                                   ? "endpoint--active"
                                   : ""
                                 }`}
-                              onClick={() => onSelectEndpoint(endpoint)}
+                              onClick={() =>
+                                onSelectEndpoint(endpoint, collection.url)
+                              }
                               onKeyDown={(event) => {
                                 if (event.key === "Enter" || event.key === " ") {
                                   event.preventDefault();
-                                  onSelectEndpoint(endpoint);
+                                  onSelectEndpoint(endpoint, collection.url);
                                 }
                               }}
                             >
@@ -284,7 +298,7 @@ export function Sidebar({
                                   className="endpoint__path"
                                   title={endpoint.path}
                                 >
-                                  {endpoint.path}
+                                  {formatEndpointPath(endpoint.path)}
                                 </span>
                               </span>
                             </div>

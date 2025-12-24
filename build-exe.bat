@@ -4,18 +4,21 @@ setlocal
 echo RestMan build runner
 echo.
 
-if not exist "webui\\node_modules" (
+if not exist "webui\node_modules" (
   echo Installing webui dependencies...
   call npm run install:webui
   if errorlevel 1 goto :error
 )
+
+echo Closing any running RestMan instances...
+taskkill /F /IM restman.exe >nul 2>&1
 
 echo Building Tauri app...
 call npm run tauri:build
 if errorlevel 1 goto :error
 
 echo.
-echo Build complete. Check src-tauri\\target\\release\\bundle
+echo Build complete. Check src-tauri\target\release\bundle
 goto :eof
 
 :error

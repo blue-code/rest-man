@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { HistoryEntry } from "../types";
 
 type ParsedResponse = {
@@ -7,6 +7,7 @@ type ParsedResponse = {
   body: string;
   bodyPretty: string;
   isJson: boolean;
+  jsonValue?: unknown;
 };
 
 type ResponsePanelProps = {
@@ -73,11 +74,13 @@ function parseResponse(raw: string): ParsedResponse | null {
   const bodyTrimmed = body.trim();
   let bodyPretty = body;
   let isJson = false;
+  let jsonValue: unknown = undefined;
   if (bodyTrimmed.startsWith("{") || bodyTrimmed.startsWith("[")) {
     try {
       const parsed = JSON.parse(bodyTrimmed);
       bodyPretty = JSON.stringify(parsed, null, 2);
       isJson = true;
+      jsonValue = parsed;
     } catch {
       bodyPretty = body;
     }
@@ -88,11 +91,76 @@ function parseResponse(raw: string): ParsedResponse | null {
     body,
     bodyPretty,
     isJson,
+    jsonValue,
   };
 }
 
 function formatTimestamp(timestamp: number) {
   return new Date(timestamp).toLocaleString();
+}
+
+function formatJsonValue(value: unknown) {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return `"${value}"`;
+  }
+  return String(value);
+}
+
+function JsonNode({
+  name,
+  value,
+}: {
+  name?: string;
+  value: unknown;
+}) {
+  const isArray = Array.isArray(value);
+  const isObject = value !== null && typeof value === "object" && !isArray;
+
+  if (isArray) {
+    const items = value as unknown[];
+    return (
+      <details className="json-node" open>
+        <summary>
+          <span className="json-node__key">{name || "root"}</span>
+          <span className="json-node__meta">Array({items.length})</span>
+        </summary>
+        <div className="json-node__children">
+          {items.map((item, index) => (
+            <JsonNode key={index} name={String(index)} value={item} />
+          ))}
+        </div>
+      </details>
+    );
+  }
+
+  if (isObject) {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return (
+      <details className="json-node" open>
+        <summary>
+          <span className="json-node__key">{name || "root"}</span>
+          <span className="json-node__meta">Object({entries.length})</span>
+        </summary>
+        <div className="json-node__children">
+          {entries.map(([key, child]) => (
+            <JsonNode key={key} name={key} value={child} />
+          ))}
+        </div>
+      </details>
+    );
+  }
+
+  return (
+    <div className="json-leaf">
+      {name ? <span className="json-leaf__key">{name}</span> : null}
+      <span className={`json-leaf__value json-leaf__value--${typeof value}`}>
+        {formatJsonValue(value)}
+      </span>
+    </div>
+  );
 }
 
 function hasRequestBody(entry: HistoryEntry) {
@@ -122,7 +190,43 @@ export function ResponsePanel({
   const [activeTab, setActiveTab] = useState<"response" | "history">(
     "response"
   );
+  const [headersExpanded, setHeadersExpanded] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
+    "idle"
+  );
   const parsed = useMemo(() => parseResponse(response), [response]);
+
+  useEffect(() => {
+    setHeadersExpanded(false);
+    setCopyState("idle");
+  }, [response]);
+
+  async function copyBody() {
+    const text = parsed?.bodyPretty || response;
+    if (!text) {
+      return;
+    }
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "true");
+        textarea.style.position = "absolute";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    } catch {
+      setCopyState("error");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    }
+  }
 
   return (
     <section className="panel panel--response">
@@ -171,24 +275,61 @@ export function ResponsePanel({
               )}
               {parsed?.headers.length ? (
                 <div className="response-section">
-                  <div className="response-section__title">Headers</div>
-                  <div className="response-headers">
-                    {parsed.headers.map((header) => (
-                      <div key={`${header.key}:${header.value}`}>
-                        <span className="response-key">{header.key}</span>
-                        <span className="response-value">{header.value}</span>
-                      </div>
-                    ))}
+                  <div className="response-section__header">
+                    <div className="response-section__title">Headers</div>
+                    <button
+                      type="button"
+                      className="ghost ghost--compact"
+                      onClick={() => setHeadersExpanded((prev) => !prev)}
+                    >
+                      {headersExpanded ? "접기" : "펼치기"}
+                    </button>
                   </div>
+                  {headersExpanded ? (
+                    <div className="response-headers">
+                      {parsed.headers.map((header) => (
+                        <div key={`${header.key}:${header.value}`}>
+                          <span className="response-key">{header.key}</span>
+                          <span className="response-value">{header.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="response-headers__collapsed">
+                      {parsed.headers.length}개 헤더 숨김
+                    </div>
+                  )}
                 </div>
               ) : null}
               <div className="response-section">
-                <div className="response-section__title">
-                  Body {parsed?.isJson ? <span className="pill">JSON</span> : null}
+                <div className="response-section__header">
+                  <div className="response-section__title">
+                    Body{" "}
+                    {parsed?.isJson ? <span className="pill">JSON</span> : null}
+                  </div>
+                  {response ? (
+                    <button
+                      type="button"
+                      className="ghost ghost--compact"
+                      onClick={copyBody}
+                    >
+                      {copyState === "copied"
+                        ? "복사됨"
+                        : copyState === "error"
+                        ? "복사 실패"
+                        : "복사"}
+                    </button>
+                  ) : null}
                 </div>
-                <pre className="response-block">
-                  {parsed ? parsed.bodyPretty : response}
-                </pre>
+                {parsed?.isJson && parsed.jsonValue !== undefined ? (
+                  <div className="json-tree">
+                    <JsonNode value={parsed.jsonValue} />
+                  </div>
+                ) : (
+                  <pre className="response-block">
+                    {parsed ? parsed.bodyPretty : response}
+                  </pre>
+                )}
               </div>
             </div>
           )

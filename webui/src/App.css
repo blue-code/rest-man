@@ -1,8 +1,9 @@
 .app {
   display: grid;
-  grid-template-columns: minmax(260px, 320px) 1fr;
+  grid-template-columns: var(--sidebar-width, 300px) 18px 1fr;
   grid-template-rows: 1fr auto;
-  gap: 18px;
+  row-gap: 18px;
+  column-gap: 0;
   height: 100vh;
   padding: 18px;
 }
@@ -17,6 +18,36 @@
   box-shadow: var(--shadow);
   overflow: hidden;
   animation: float-in 500ms ease both;
+}
+
+.sidebar-resizer {
+  grid-row: 1 / span 2;
+  cursor: col-resize;
+  position: relative;
+  border-radius: 999px;
+}
+
+.sidebar-resizer::before {
+  content: "";
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  left: 8px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--outline);
+  opacity: 0.6;
+}
+
+.sidebar-resizer:hover::before,
+.is-resizing .sidebar-resizer::before {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.is-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .sidebar__header {
@@ -494,7 +525,7 @@
 
 .request-grid {
   display: grid;
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
 }
 
@@ -656,6 +687,13 @@
   gap: 8px;
 }
 
+.response-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .response-section__title {
   font-weight: 600;
   font-size: 0.85rem;
@@ -670,10 +708,92 @@
   border: 1px solid var(--outline);
 }
 
-.response-headers>div {
+.response-headers > div {
   display: grid;
   grid-template-columns: 1fr 2fr;
   gap: 8px;
+}
+
+.response-headers__collapsed {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.json-tree {
+  display: grid;
+  gap: 8px;
+  background: var(--surface-muted);
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.82rem;
+}
+
+.json-node {
+  border-left: 2px solid var(--outline);
+  padding-left: 10px;
+}
+
+.json-node > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.json-node > summary::-webkit-details-marker {
+  display: none;
+}
+
+.json-node__key {
+  color: var(--ink);
+}
+
+.json-node__meta {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.json-node__children {
+  display: grid;
+  gap: 6px;
+  padding: 6px 0 2px 12px;
+}
+
+.json-leaf {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.json-leaf__key {
+  color: var(--muted);
+}
+
+.json-leaf__value {
+  word-break: break-word;
+}
+
+.json-leaf__value--string {
+  color: var(--accent);
+}
+
+.json-leaf__value--number {
+  color: var(--success);
+}
+
+.json-leaf__value--boolean {
+  color: var(--ink);
+}
+
+.json-leaf__value--object {
+  color: var(--muted);
 }
 
 .response-key {
@@ -762,6 +882,11 @@
   cursor: pointer;
 }
 
+.ghost--compact {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+}
+
 .empty-state {
   border: 1px dashed var(--outline);
   border-radius: 12px;
@@ -785,6 +910,7 @@
 }
 
 .statusbar {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -860,6 +986,10 @@
 
   .sidebar {
     grid-row: 1;
+  }
+
+  .sidebar-resizer {
+    display: none;
   }
 
   .workspace {

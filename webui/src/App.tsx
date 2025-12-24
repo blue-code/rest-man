@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { RequestPanel } from "./components/RequestPanel";
@@ -30,14 +30,54 @@ const formBodyTypes = new Set([
 const historyStorageKey = "restman.history";
 const openApiHistoryKey = "restman.openapiHistory";
 const autoRequestIntervalKey = "restman.autoRequestInterval";
+const sidebarWidthKey = "restman.sidebarWidth";
 const statusResetDelayMs = 4500;
 const maxHistoryEntries = 50;
 const maxOpenApiHistoryEntries = 8;
 const defaultAutoRequestIntervalMs = 60000;
 const syncResetDelayMs = 3500;
+const minSidebarWidth = 240;
+const minWorkspaceWidth = 360;
 
 function endpointKey(endpoint: Endpoint) {
   return `${endpoint.method}:${endpoint.path}`;
+}
+
+function isAbsoluteUrl(value: string) {
+  return /^https?:\/\//i.test(value);
+}
+
+function normalizeEndpointPath(value: string) {
+  if (!isAbsoluteUrl(value)) {
+    return value;
+  }
+  try {
+    const parsed = new URL(value);
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return value;
+  }
+}
+
+function resolveEndpointUrl(endpoint: Endpoint, collectionUrl?: string | null) {
+  if (isAbsoluteUrl(endpoint.path)) {
+    return endpoint.path;
+  }
+  if (!collectionUrl) {
+    return endpoint.path;
+  }
+  try {
+    const base = new URL(collectionUrl);
+    if (!base.origin || base.origin === "null") {
+      return endpoint.path;
+    }
+    if (endpoint.path.startsWith("/")) {
+      return `${base.origin}${endpoint.path}`;
+    }
+    return `${base.origin}/${endpoint.path}`;
+  } catch {
+    return endpoint.path;
+  }
 }
 
 function isFormBodyType(bodyType: string) {
@@ -117,6 +157,11 @@ function App() {
   const [endpointDrafts, setEndpointDrafts] = useState<
     Record<string, RequestDraft>
   >({});
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const stored = window.localStorage.getItem(sidebarWidthKey);
+    const parsed = stored ? Number(stored) : NaN;
+    return Number.isNaN(parsed) ? 300 : parsed;
+  });
   const [autoRequests, setAutoRequests] = useState<Record<string, boolean>>({});
   const [autoRequestIntervalMs, setAutoRequestIntervalMs] = useState(
     defaultAutoRequestIntervalMs
@@ -131,17 +176,25 @@ function App() {
   const autoRequestInFlightRef = useRef<Record<string, boolean>>({});
   const draftsRef = useRef(endpointDrafts);
   const collectionsRef = useRef(collections);
+  const appRef = useRef<HTMLDivElement | null>(null);
+  const isResizingRef = useRef(false);
 
   const selectedEndpointKey = selectedEndpoint
     ? endpointKey(selectedEndpoint)
+    : null;
+  const selectedEndpointPath = selectedEndpoint
+    ? normalizeEndpointPath(selectedEndpoint.path)
     : null;
   const visibleHistory = selectedEndpoint
     ? history.filter(
         (entry) =>
           entry.method === selectedEndpoint.method &&
-          entry.url === selectedEndpoint.path
+          normalizeEndpointPath(entry.url) === selectedEndpointPath
       )
     : history;
+  const appStyle = {
+    "--sidebar-width": `${sidebarWidth}px`,
+  } as CSSProperties;
 
   useEffect(() => {
     const unlisten = listen<Collection>("collection-updated", (event) => {
@@ -208,6 +261,10 @@ function App() {
   }, [autoRequestIntervalMs]);
 
   useEffect(() => {
+    window.localStorage.setItem(sidebarWidthKey, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
     draftsRef.current = endpointDrafts;
   }, [endpointDrafts]);
 
@@ -224,6 +281,53 @@ function App() {
         window.clearTimeout(syncTimeoutRef.current);
       }
     };
+  }, []);
+
+  useEffect(() => {
+    function handleMouseMove(event: MouseEvent) {
+      if (!isResizingRef.current) {
+        return;
+      }
+      const rect = appRef.current?.getBoundingClientRect();
+      if (!rect) {
+        return;
+      }
+      const maxWidth = Math.max(minSidebarWidth, rect.width - minWorkspaceWidth);
+      const nextWidth = Math.min(
+        Math.max(event.clientX - rect.left, minSidebarWidth),
+        maxWidth
+      );
+      setSidebarWidth(nextWidth);
+    }
+
+    function stopResize() {
+      if (!isResizingRef.current) {
+        return;
+      }
+      isResizingRef.current = false;
+      document.body.classList.remove("is-resizing");
+    }
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopResize);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleResize() {
+      const rect = appRef.current?.getBoundingClientRect();
+      if (!rect) {
+        return;
+      }
+      const maxWidth = Math.max(minSidebarWidth, rect.width - minWorkspaceWidth);
+      setSidebarWidth((prev) => Math.min(prev, maxWidth));
+    }
+    window.addEventListener("resize", handleResize);
+    handleResize();
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   useEffect(() => {
@@ -274,6 +378,15 @@ function App() {
       () => setStatusMessage("Ready"),
       statusResetDelayMs
     );
+  }
+
+  function startResize(event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    if (window.innerWidth < 900) {
+      return;
+    }
+    isResizingRef.current = true;
+    document.body.classList.add("is-resizing");
   }
 
   function updateOpenApiHistory(url: string) {
@@ -335,6 +448,20 @@ function App() {
     return null;
   }
 
+  function findCollectionUrlForEndpoint(endpoint: Endpoint) {
+    const targetKey = endpointKey(endpoint);
+    for (const collection of Object.values(collectionsRef.current)) {
+      for (const endpoints of Object.values(collection.groups)) {
+        for (const candidate of endpoints) {
+          if (candidate === endpoint || endpointKey(candidate) === targetKey) {
+            return collection.url;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   async function importOpenApi() {
     const trimmedUrl = openApiUrl.trim();
     if (!trimmedUrl) {
@@ -362,7 +489,7 @@ function App() {
     }
   }
 
-  function selectEndpoint(endpoint: Endpoint) {
+  function selectEndpoint(endpoint: Endpoint, collectionUrl: string) {
     const key = endpointKey(endpoint);
     const draft = endpointDrafts[key] || buildDraftFromEndpoint(endpoint);
     const resolvedBodyType =
@@ -379,7 +506,7 @@ function App() {
     };
     setSelectedEndpoint(endpoint);
     setMethod(endpoint.method);
-    setUrl(endpoint.path);
+    setUrl(resolveEndpointUrl(endpoint, collectionUrl));
     setParamValues(draft.params);
     setRequestBody(draft.body);
     setBodyType(resolvedBodyType);
@@ -394,7 +521,10 @@ function App() {
     for (const collection of Object.values(collections)) {
       for (const endpoints of Object.values(collection.groups)) {
         for (const endpoint of endpoints) {
-          if (endpoint.method === entry.method && endpoint.path === entry.url) {
+          if (
+            endpoint.method === entry.method &&
+            normalizeEndpointPath(endpoint.path) === normalizeEndpointPath(entry.url)
+          ) {
             return endpoint;
           }
         }
@@ -420,7 +550,12 @@ function App() {
         : requestedBodyType;
     setSelectedEndpoint(matchedEndpoint);
     setMethod(entry.method);
-    setUrl(matchedEndpoint ? entry.url : entry.resolved_url || entry.url);
+    if (matchedEndpoint) {
+      const collectionUrl = findCollectionUrlForEndpoint(matchedEndpoint);
+      setUrl(resolveEndpointUrl(matchedEndpoint, collectionUrl));
+    } else {
+      setUrl(entry.resolved_url || entry.url);
+    }
     setParamValues(entry.params);
     setBodyType(nextBodyType);
     if (isFormBodyType(nextBodyType)) {
@@ -532,11 +667,13 @@ function App() {
       return;
     }
     autoRequestInFlightRef.current[key] = true;
+    const collectionUrl = findCollectionUrlForEndpoint(endpoint);
+    const resolvedEndpointUrl = resolveEndpointUrl(endpoint, collectionUrl);
     const draft = draftsRef.current[key] || buildDraftFromEndpoint(endpoint);
     const { finalUrl, headers, body, multipart } = buildRequestPayload(
       endpoint,
       endpoint.method,
-      endpoint.path,
+      resolvedEndpointUrl,
       draft.params,
       draft.body,
       draft.bodyType,
@@ -666,7 +803,7 @@ function App() {
   }
 
   return (
-    <div className="app">
+    <div className="app" ref={appRef} style={appStyle}>
       <Sidebar
         openApiUrl={openApiUrl}
         onOpenApiUrlChange={setOpenApiUrl}
@@ -704,6 +841,13 @@ function App() {
         syncStatus={syncStatus}
         lastSyncedAt={lastSyncedAt}
         isImporting={isImporting}
+      />
+      <div
+        className="sidebar-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        onMouseDown={startResize}
       />
       <main className="workspace">
         <RequestPanel

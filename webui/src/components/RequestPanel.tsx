@@ -79,6 +79,17 @@ export function RequestPanel({
     bodyType === "application/x-www-form-urlencoded";
   const showBodyTypeSelect = bodyMediaTypes.length > 1;
   const showBodyTypeLabel = bodyMediaTypes.length === 1;
+  const hasParameters = parameters.length > 0;
+  const hasBodyDefinition = Boolean(
+    bodyRequired ||
+      bodyDescription ||
+      bodyMediaTypes.length > 0 ||
+      bodyFields.length > 0 ||
+      selectedEndpoint?.body_example
+  );
+  const showBodyCard = showBody && (selectedEndpoint ? hasBodyDefinition : true);
+  const showParamsCard = hasParameters;
+  const showRequestDetails = showParamsCard || showBodyCard;
 
   async function handlePickFile(fieldName: string, allowMultiple: boolean) {
     try {
@@ -160,171 +171,169 @@ export function RequestPanel({
           </button>
         </div>
 
-        <div className="request-grid">
-          <div className="card">
-            <div className="card__header">Parameters</div>
-            {parameters.length === 0 ? (
-              <div className="empty-state empty-state--compact">
-                <div className="empty-state__title">No parameters</div>
-                <div className="empty-state__body">
-                  This endpoint does not define path, query, or header inputs.
+        {showRequestDetails ? (
+          <div className="request-grid">
+            {showParamsCard && (
+              <div className="card">
+                <div className="card__header">Parameters</div>
+                <div className="param-list">
+                  {parameters.map((param) => (
+                    <div key={param.name} className="param-row">
+                      <div className="param-meta">
+                        <span className="param-name">
+                          <code>{buildParamLabel(param)}</code>
+                        </span>
+                        <span className="param-type">{param.in_type}</span>
+                      </div>
+                      <input
+                        value={paramValues[param.name] || ""}
+                        onChange={(event) =>
+                          onParamChange(param.name, event.target.value)
+                        }
+                        placeholder={param.in_type}
+                      />
+                      <div className="param-desc">
+                        {param.description || "No description"}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ) : (
-              <div className="param-list">
-                {parameters.map((param) => (
-                  <div key={param.name} className="param-row">
-                    <div className="param-meta">
-                      <span className="param-name">
-                        <code>{buildParamLabel(param)}</code>
-                      </span>
-                      <span className="param-type">{param.in_type}</span>
-                    </div>
-                    <input
-                      value={paramValues[param.name] || ""}
-                      onChange={(event) =>
-                        onParamChange(param.name, event.target.value)
-                      }
-                      placeholder={param.in_type}
-                    />
-                    <div className="param-desc">
-                      {param.description || "No description"}
-                    </div>
-                  </div>
-                ))}
-              </div>
             )}
-          </div>
 
-          <div className={`card ${showBody ? "" : "card--disabled"}`}>
-            <div className="card__header">
-              <span>
-                Body {bodyRequired ? <span className="pill">Required</span> : null}
-              </span>
-              {showBodyTypeSelect ? (
-                <select
-                  className="body-type-select"
-                  value={bodyType}
-                  onChange={(event) => onBodyTypeChange(event.target.value)}
-                  disabled={!showBody}
-                  aria-label="Request body content type"
-                >
-                  {bodyMediaTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-              ) : showBodyTypeLabel ? (
-                <span className="pill">{bodyMediaTypes[0]}</span>
-              ) : null}
-            </div>
-            {bodyDescription && (
-              <div className="body-hint">{bodyDescription}</div>
-            )}
-            {showBody ? (
-              isFormBody ? (
-                bodyFields.length === 0 ? (
-                  <div className="empty-state empty-state--compact">
-                    <div className="empty-state__title">No form fields</div>
-                    <div className="empty-state__body">
-                      OpenAPI does not define multipart/form fields for this
-                      request.
+            {showBodyCard && (
+              <div className="card">
+                <div className="card__header">
+                  <span>
+                    Body{" "}
+                    {bodyRequired ? <span className="pill">Required</span> : null}
+                  </span>
+                  {showBodyTypeSelect ? (
+                    <select
+                      className="body-type-select"
+                      value={bodyType}
+                      onChange={(event) => onBodyTypeChange(event.target.value)}
+                      aria-label="Request body content type"
+                    >
+                      {bodyMediaTypes.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  ) : showBodyTypeLabel ? (
+                    <span className="pill">{bodyMediaTypes[0]}</span>
+                  ) : null}
+                </div>
+                {bodyDescription && (
+                  <div className="body-hint">{bodyDescription}</div>
+                )}
+                {isFormBody ? (
+                  bodyFields.length === 0 ? (
+                    <div className="empty-state empty-state--compact">
+                      <div className="empty-state__title">No form fields</div>
+                      <div className="empty-state__body">
+                        OpenAPI does not define multipart/form fields for this
+                        request.
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="param-list">
-                    {bodyFields.map((field) => {
-                      const fieldFiles = fileValues[field.name] || [];
-                      return (
-                        <div key={field.name} className="param-row">
-                          <div className="param-meta">
-                            <span className="param-name">
-                              <code>
-                                {formatFieldLabel(field.name, field.required)}
-                              </code>
-                            </span>
-                            <span className="param-type">
-                              {field.is_file ? "file" : "text"}
-                              {field.is_array ? "[]" : ""}
-                            </span>
-                          </div>
-                          {field.is_file ? (
-                            <div className="file-picker">
-                              <div className="file-picker__actions">
-                                <button
-                                  type="button"
-                                  className="ghost"
-                                  onClick={() =>
-                                    handlePickFile(field.name, field.is_array)
-                                  }
-                                >
-                                  파일 선택
-                                </button>
-                                {fieldFiles.length > 0 ? (
+                  ) : (
+                    <div className="param-list">
+                      {bodyFields.map((field) => {
+                        const fieldFiles = fileValues[field.name] || [];
+                        return (
+                          <div key={field.name} className="param-row">
+                            <div className="param-meta">
+                              <span className="param-name">
+                                <code>
+                                  {formatFieldLabel(field.name, field.required)}
+                                </code>
+                              </span>
+                              <span className="param-type">
+                                {field.is_file ? "file" : "text"}
+                                {field.is_array ? "[]" : ""}
+                              </span>
+                            </div>
+                            {field.is_file ? (
+                              <div className="file-picker">
+                                <div className="file-picker__actions">
                                   <button
                                     type="button"
                                     className="ghost"
                                     onClick={() =>
-                                      onFileValuesChange(field.name, [])
+                                      handlePickFile(
+                                        field.name,
+                                        field.is_array
+                                      )
                                     }
                                   >
-                                    비우기
+                                    파일 선택
                                   </button>
-                                ) : null}
+                                  {fieldFiles.length > 0 ? (
+                                    <button
+                                      type="button"
+                                      className="ghost"
+                                      onClick={() =>
+                                        onFileValuesChange(field.name, [])
+                                      }
+                                    >
+                                      비우기
+                                    </button>
+                                  ) : null}
+                                </div>
+                                {fieldFiles.length > 0 ? (
+                                  <div className="file-picker__list">
+                                    {fieldFiles.map((path) => (
+                                      <span key={path}>
+                                        {formatFileName(path)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="file-picker__empty">
+                                    선택된 파일 없음
+                                  </div>
+                                )}
                               </div>
-                              {fieldFiles.length > 0 ? (
-                                <div className="file-picker__list">
-                                  {fieldFiles.map((path) => (
-                                    <span key={path}>
-                                      {formatFileName(path)}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="file-picker__empty">
-                                  선택된 파일 없음
-                                </div>
-                              )}
+                            ) : (
+                              <input
+                                value={formValues[field.name] || ""}
+                                onChange={(event) =>
+                                  onFormValueChange(
+                                    field.name,
+                                    event.target.value
+                                  )
+                                }
+                                placeholder="text"
+                              />
+                            )}
+                            <div className="param-desc">
+                              {field.description || "No description"}
                             </div>
-                          ) : (
-                            <input
-                              value={formValues[field.name] || ""}
-                              onChange={(event) =>
-                                onFormValueChange(
-                                  field.name,
-                                  event.target.value
-                                )
-                              }
-                              placeholder="text"
-                            />
-                          )}
-                          <div className="param-desc">
-                            {field.description || "No description"}
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )
-              ) : (
-                <textarea
-                  className="json-editor"
-                  value={requestBody}
-                  onChange={(event) => onRequestBodyChange(event.target.value)}
-                  placeholder='{ "id": 1, "name": "example" }'
-                />
-              )
-            ) : (
-              <div className="empty-state empty-state--compact">
-                <div className="empty-state__title">No body for GET</div>
-                <div className="empty-state__body">
-                  Switch to POST or PUT to enable a request body.
-                </div>
+                        );
+                      })}
+                    </div>
+                  )
+                ) : (
+                  <textarea
+                    className="json-editor"
+                    value={requestBody}
+                    onChange={(event) => onRequestBodyChange(event.target.value)}
+                    placeholder='{ "id": 1, "name": "example" }'
+                  />
+                )}
               </div>
             )}
           </div>
-        </div>
+        ) : (
+          <div className="empty-state">
+            <div className="empty-state__title">요청 상세가 없습니다</div>
+            <div className="empty-state__body">
+              이 요청은 파라미터와 본문이 필요하지 않습니다.
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );
