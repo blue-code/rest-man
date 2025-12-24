@@ -493,6 +493,7 @@
 .request-bar select,
 .request-bar input,
 .param-row input,
+.param-row select,
 .json-editor {
   border-radius: 12px;
   border: 1px solid var(--outline);

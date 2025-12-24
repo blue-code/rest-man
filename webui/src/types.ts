@@ -6,6 +6,7 @@ export interface Parameter {
   description?: string;
   required: boolean;
   example?: unknown;
+  enum_values?: string[];
 }
 
 export interface BodyField {

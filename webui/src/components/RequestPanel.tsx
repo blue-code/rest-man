@@ -177,26 +177,46 @@ export function RequestPanel({
               <div className="card">
                 <div className="card__header">Parameters</div>
                 <div className="param-list">
-                  {parameters.map((param) => (
-                    <div key={param.name} className="param-row">
-                      <div className="param-meta">
-                        <span className="param-name">
-                          <code>{buildParamLabel(param)}</code>
-                        </span>
-                        <span className="param-type">{param.in_type}</span>
+                  {parameters.map((param) => {
+                    const enumValues = param.enum_values ?? [];
+                    const isEnumParam = enumValues.length > 0;
+                    return (
+                      <div key={param.name} className="param-row">
+                        <div className="param-meta">
+                          <span className="param-name">
+                            <code>{buildParamLabel(param)}</code>
+                          </span>
+                          <span className="param-type">{param.in_type}</span>
+                        </div>
+                        {isEnumParam ? (
+                          <select
+                            value={paramValues[param.name] || ""}
+                            onChange={(event) =>
+                              onParamChange(param.name, event.target.value)
+                            }
+                          >
+                            <option value="">선택</option>
+                            {enumValues.map((value) => (
+                              <option key={value} value={value}>
+                                {value}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            value={paramValues[param.name] || ""}
+                            onChange={(event) =>
+                              onParamChange(param.name, event.target.value)
+                            }
+                            placeholder={param.in_type}
+                          />
+                        )}
+                        <div className="param-desc">
+                          {param.description || "No description"}
+                        </div>
                       </div>
-                      <input
-                        value={paramValues[param.name] || ""}
-                        onChange={(event) =>
-                          onParamChange(param.name, event.target.value)
-                        }
-                        placeholder={param.in_type}
-                      />
-                      <div className="param-desc">
-                        {param.description || "No description"}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

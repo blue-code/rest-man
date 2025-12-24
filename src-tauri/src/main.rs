@@ -22,6 +22,7 @@ struct Parameter {
     description: Option<String>,
     required: bool,
     example: Option<serde_json::Value>,
+    enum_values: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -85,6 +86,49 @@ fn resolve_ref<'a>(doc: &'a Value, value: &'a Value, depth: usize) -> &'a Value 
         }
     }
     value
+}
+
+fn enum_value_to_string(value: &Value) -> String {
+    if let Some(text) = value.as_str() {
+        return text.to_string();
+    }
+    if let Some(num) = value.as_i64() {
+        return num.to_string();
+    }
+    if let Some(num) = value.as_u64() {
+        return num.to_string();
+    }
+    if let Some(num) = value.as_f64() {
+        return num.to_string();
+    }
+    if let Some(flag) = value.as_bool() {
+        return flag.to_string();
+    }
+    value.to_string()
+}
+
+fn extract_enum_values(doc: &Value, schema: &Value) -> Option<Vec<String>> {
+    let resolved = resolve_ref(doc, schema, 0);
+    let enum_values = resolved.get("enum")?.as_array()?;
+    let values: Vec<String> = enum_values.iter().map(enum_value_to_string).collect();
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
+fn extract_required_fields(schema: &Value) -> std::collections::HashSet<String> {
+    schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn extract_schema_example(doc: &Value, schema: &Value) -> Option<Value> {
@@ -162,6 +206,35 @@ fn build_example_from_schema(doc: &Value, schema: &Value, depth: usize) -> Optio
         return Some(Value::from(""));
     }
     None
+}
+
+fn expand_query_object_parameters(doc: &Value, param: &Value) -> Option<Vec<Parameter>> {
+    let resolved = resolve_ref(doc, param, 0);
+    let in_type = resolved.get("in").and_then(|v| v.as_str()).unwrap_or("query");
+    if in_type != "query" {
+        return None;
+    }
+    let schema = resolved.get("schema")?;
+    let resolved_schema = resolve_ref(doc, schema, 0);
+    let props = resolved_schema.get("properties").and_then(|v| v.as_object())?;
+    let required_fields = extract_required_fields(resolved_schema);
+    let mut expanded = Vec::new();
+    for (name, prop_schema) in props {
+        let prop_resolved = resolve_ref(doc, prop_schema, 0);
+        let description = prop_resolved
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        expanded.push(Parameter {
+            name: name.clone(),
+            in_type: in_type.to_string(),
+            description,
+            required: required_fields.contains(name),
+            example: extract_schema_example(doc, prop_resolved),
+            enum_values: extract_enum_values(doc, prop_resolved),
+        });
+    }
+    Some(expanded)
 }
 
 fn extract_parameter_example(doc: &Value, param: &Value) -> Option<Value> {
@@ -325,6 +398,16 @@ fn parse_openapi_internal(content: &str, url: &str, etag: Option<String>) -> Res
                         .chain(op_params.into_iter().flatten());
                     for p in param_iter {
                         let resolved = resolve_ref(&json, p, 0);
+                        if let Some(expanded) = expand_query_object_parameters(&json, resolved) {
+                            for param in expanded {
+                                let key = format!("{}:{}", param.in_type, param.name);
+                                if !seen.insert(key) {
+                                    continue;
+                                }
+                                params.push(param);
+                            }
+                            continue;
+                        }
                         let name = resolved["name"].as_str().unwrap_or("").to_string();
                         let in_type = resolved["in"].as_str().unwrap_or("query").to_string();
                         let key = format!("{}:{}", in_type, name);
@@ -347,6 +430,9 @@ fn parse_openapi_internal(content: &str, url: &str, etag: Option<String>) -> Res
                             description,
                             required: resolved["required"].as_bool().unwrap_or(false),
                             example: extract_parameter_example(&json, resolved),
+                            enum_values: resolved
+                                .get("schema")
+                                .and_then(|schema| extract_enum_values(&json, schema)),
                         });
                     }
 
