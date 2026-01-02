@@ -17,6 +17,13 @@ export interface BodyField {
   is_array: boolean;
 }
 
+export interface ResponseSchema {
+  status: string;
+  description?: string;
+  content_type?: string;
+  schema?: unknown;
+}
+
 export interface Endpoint {
   method: HttpMethod;
   path: string;
@@ -29,6 +36,7 @@ export interface Endpoint {
   body_media_types?: string[];
   body_fields?: BodyField[];
   body_fields_type?: string;
+  response_schemas?: ResponseSchema[];
 }
 
 export interface HistoryEntry {

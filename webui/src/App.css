@@ -708,6 +708,58 @@
   font-size: 0.85rem;
 }
 
+.schema-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.schema-hint {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.schema-table__wrap {
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  background: var(--surface-muted);
+  overflow: auto;
+}
+
+.schema-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.schema-table th,
+.schema-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--outline);
+  vertical-align: top;
+}
+
+.schema-table th {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.7);
+  position: sticky;
+  top: 0;
+}
+
+.schema-table tr:last-child td {
+  border-bottom: none;
+}
+
+.schema-cell--path {
+  white-space: nowrap;
+}
+
 .response-headers {
   display: grid;
   gap: 6px;

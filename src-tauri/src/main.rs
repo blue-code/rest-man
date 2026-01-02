@@ -35,6 +35,14 @@ struct BodyField {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+struct ResponseSchema {
+    status: String,
+    description: Option<String>,
+    content_type: Option<String>,
+    schema: Option<Value>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct Endpoint {
     method: String,
     path: String,
@@ -47,6 +55,7 @@ struct Endpoint {
     body_media_types: Vec<String>,
     body_fields: Vec<BodyField>,
     body_fields_type: Option<String>,
+    response_schemas: Vec<ResponseSchema>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -86,6 +95,29 @@ fn resolve_ref<'a>(doc: &'a Value, value: &'a Value, depth: usize) -> &'a Value 
         }
     }
     value
+}
+
+fn expand_schema_refs(doc: &Value, schema: &Value, depth: usize) -> Value {
+    if depth > 8 {
+        return schema.clone();
+    }
+    let resolved = resolve_ref(doc, schema, 0);
+    match resolved {
+        Value::Object(map) => {
+            let mut expanded = Map::new();
+            for (key, value) in map {
+                expanded.insert(key.clone(), expand_schema_refs(doc, value, depth + 1));
+            }
+            Value::Object(expanded)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| expand_schema_refs(doc, item, depth + 1))
+                .collect(),
+        ),
+        _ => resolved.clone(),
+    }
 }
 
 fn enum_value_to_string(value: &Value) -> String {
@@ -315,6 +347,57 @@ fn extract_request_body_media_types(doc: &Value, request_body: &Value) -> Vec<St
     content.keys().cloned().collect()
 }
 
+fn extract_response_schemas(doc: &Value, responses: &Value) -> Vec<ResponseSchema> {
+    let resolved = resolve_ref(doc, responses, 0);
+    let responses_obj = match resolved.as_object() {
+        Some(obj) => obj,
+        None => return Vec::new(),
+    };
+    let mut schemas = Vec::new();
+    for (status, response) in responses_obj {
+        let resolved_response = resolve_ref(doc, response, 0);
+        let description = resolved_response
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let content = resolved_response.get("content").and_then(|v| v.as_object());
+        if let Some(content_map) = content {
+            let (content_type, content_value) = if let Some(json_content) =
+                content_map.get("application/json")
+            {
+                ("application/json".to_string(), json_content)
+            } else if let Some((key, value)) = content_map.iter().next() {
+                (key.to_string(), value)
+            } else {
+                ("".to_string(), &Value::Null)
+            };
+            let schema = content_value
+                .get("schema")
+                .map(|schema| expand_schema_refs(doc, schema, 0))
+                .and_then(|schema| if schema.is_null() { None } else { Some(schema) });
+            let content_type = if content_type.is_empty() {
+                None
+            } else {
+                Some(content_type)
+            };
+            schemas.push(ResponseSchema {
+                status: status.clone(),
+                description,
+                content_type,
+                schema,
+            });
+        } else {
+            schemas.push(ResponseSchema {
+                status: status.clone(),
+                description,
+                content_type: None,
+                schema: None,
+            });
+        }
+    }
+    schemas
+}
+
 fn is_binary_schema(doc: &Value, schema: &Value) -> bool {
     let resolved = resolve_ref(doc, schema, 0);
     let schema_type = resolved.get("type").and_then(|v| v.as_str());
@@ -467,6 +550,10 @@ fn parse_openapi_internal(content: &str, url: &str, etag: Option<String>) -> Res
                             body_fields_type = Some("application/x-www-form-urlencoded".to_string());
                         }
                     }
+                    let response_schemas = details
+                        .get("responses")
+                        .map(|responses| extract_response_schemas(&json, responses))
+                        .unwrap_or_default();
 
                     let endpoint = Endpoint {
                         method: method.to_uppercase(),
@@ -480,6 +567,7 @@ fn parse_openapi_internal(content: &str, url: &str, etag: Option<String>) -> Res
                         body_media_types,
                         body_fields,
                         body_fields_type,
+                        response_schemas,
                     };
 
                     let tag = details["tags"][0].as_str().unwrap_or("Default").to_string();

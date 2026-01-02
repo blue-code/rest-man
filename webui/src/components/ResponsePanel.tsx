@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { HistoryEntry } from "../types";
+import type { HistoryEntry, ResponseSchema } from "../types";
 
 type ParsedResponse = {
   statusLine: string | null;
@@ -10,10 +10,23 @@ type ParsedResponse = {
   jsonValue?: unknown;
 };
 
+type SchemaRow = {
+  path: string;
+  name: string;
+  depth: number;
+  type: string;
+  required: boolean;
+  description: string;
+  example: string;
+  format: string;
+  enumValues: string;
+};
+
 type ResponsePanelProps = {
   response: string;
   isSending: boolean;
   history: HistoryEntry[];
+  responseSchemas: ResponseSchema[];
   onReuseHistory: (entry: HistoryEntry) => void;
   onPreviewHistory: (entry: HistoryEntry) => void;
 };
@@ -93,6 +106,198 @@ function parseResponse(raw: string): ParsedResponse | null {
     isJson,
     jsonValue,
   };
+}
+
+function parseStatusCode(statusLine: string | null) {
+  if (!statusLine) {
+    return null;
+  }
+  const match = statusLine.match(/\b\d{3}\b/);
+  return match ? match[0] : null;
+}
+
+function normalizeSchemaInput(schema: unknown) {
+  if (typeof schema === "string") {
+    try {
+      return JSON.parse(schema);
+    } catch {
+      return schema;
+    }
+  }
+  return schema;
+}
+
+function formatExampleValue(value: unknown) {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function isSchemaObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function schemaTypeLabel(schema: Record<string, unknown>): string {
+  const typeValue = typeof schema.type === "string" ? schema.type : "";
+  if (typeValue === "array") {
+    if (isSchemaObject(schema.items)) {
+      const itemType: string = schemaTypeLabel(schema.items);
+      return itemType ? `array<${itemType}>` : "array";
+    }
+    return "array";
+  }
+  if (typeValue) {
+    return typeValue;
+  }
+  if (Array.isArray(schema.enum)) {
+    return "enum";
+  }
+  if (isSchemaObject(schema.properties)) {
+    return "object";
+  }
+  if (Array.isArray(schema.oneOf)) {
+    return "oneOf";
+  }
+  if (Array.isArray(schema.anyOf)) {
+    return "anyOf";
+  }
+  if (Array.isArray(schema.allOf)) {
+    return "allOf";
+  }
+  return "object";
+}
+
+function buildSchemaRows(schemaInput: unknown) {
+  const normalized = normalizeSchemaInput(schemaInput);
+  if (!isSchemaObject(normalized)) {
+    return [];
+  }
+  const rows: SchemaRow[] = [];
+
+  const walk = (
+    schema: Record<string, unknown>,
+    path: string,
+    depth: number,
+    required: boolean
+  ) => {
+    const description =
+      typeof schema.description === "string" ? schema.description : "";
+    const example = formatExampleValue(
+      schema.example ?? schema.default ?? ""
+    );
+    const format = typeof schema.format === "string" ? schema.format : "";
+    const enumValues = Array.isArray(schema.enum)
+      ? schema.enum.map((value) => String(value)).join(", ")
+      : "";
+
+    rows.push({
+      path,
+      name: path === "root" ? "root" : path.split(".").pop() || path,
+      depth,
+      type: schemaTypeLabel(schema),
+      required,
+      description,
+      example,
+      format,
+      enumValues,
+    });
+
+    const properties = isSchemaObject(schema.properties)
+      ? schema.properties
+      : null;
+    if (properties) {
+      const requiredSet = new Set<string>(
+        Array.isArray(schema.required)
+          ? schema.required.filter((value) => typeof value === "string")
+          : []
+      );
+      Object.entries(properties).forEach(([key, value]) => {
+        if (isSchemaObject(value)) {
+          walk(
+            value,
+            path === "root" ? `root.${key}` : `${path}.${key}`,
+            depth + 1,
+            requiredSet.has(key)
+          );
+        }
+      });
+    }
+
+    if (schema.type === "array" && isSchemaObject(schema.items)) {
+      walk(
+        schema.items,
+        path === "root" ? "root[]" : `${path}[]`,
+        depth + 1,
+        false
+      );
+    }
+
+    const compositionKeys: Array<"oneOf" | "anyOf" | "allOf"> = [
+      "oneOf",
+      "anyOf",
+      "allOf",
+    ];
+    compositionKeys.forEach((key) => {
+      const entries = schema[key];
+      if (!Array.isArray(entries)) {
+        return;
+      }
+      entries.forEach((entry, index) => {
+        if (isSchemaObject(entry)) {
+          walk(
+            entry,
+            `${path} (${key} ${index + 1})`,
+            depth + 1,
+            false
+          );
+        }
+      });
+    });
+  };
+
+  walk(normalized, "root", 0, false);
+  return rows;
+}
+
+function pickResponseSchema(
+  schemas: ResponseSchema[],
+  statusCode: string | null
+) {
+  if (schemas.length === 0) {
+    return { schema: null, match: "none" as const };
+  }
+  if (statusCode) {
+    const direct = schemas.find((schema) => schema.status === statusCode);
+    if (direct) {
+      return { schema: direct, match: "exact" as const };
+    }
+    const wildcard = schemas.find((schema) => {
+      const normalized = schema.status.trim().toLowerCase();
+      return (
+        normalized.length === 3 &&
+        normalized.endsWith("xx") &&
+        normalized[0] === statusCode[0]
+      );
+    });
+    if (wildcard) {
+      return { schema: wildcard, match: "fallback" as const };
+    }
+  }
+  const fallback =
+    schemas.find((schema) => schema.status.trim().toLowerCase() === "default") ||
+    schemas[0];
+  return { schema: fallback, match: "fallback" as const };
 }
 
 function formatTimestamp(timestamp: number) {
@@ -184,17 +389,36 @@ export function ResponsePanel({
   response,
   isSending,
   history,
+  responseSchemas,
   onReuseHistory,
   onPreviewHistory,
 }: ResponsePanelProps) {
-  const [activeTab, setActiveTab] = useState<"response" | "history">(
-    "response"
-  );
+  const [activeTab, setActiveTab] = useState<
+    "response" | "document" | "history"
+  >("response");
   const [headersExpanded, setHeadersExpanded] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle"
   );
   const parsed = useMemo(() => parseResponse(response), [response]);
+  const statusCode = useMemo(
+    () => parseStatusCode(parsed?.statusLine ?? null),
+    [parsed?.statusLine]
+  );
+  const schemaPick = useMemo(
+    () => pickResponseSchema(responseSchemas, statusCode),
+    [responseSchemas, statusCode]
+  );
+  const schemaRows = useMemo(
+    () => buildSchemaRows(schemaPick.schema?.schema),
+    [schemaPick.schema?.schema]
+  );
+  const schemaStatuses = useMemo(
+    () => responseSchemas.map((schema) => schema.status).join(", "),
+    [responseSchemas]
+  );
+  const activeSchema = schemaPick.schema;
+  const showFallbackNotice = schemaPick.match === "fallback" && Boolean(statusCode);
 
   useEffect(() => {
     setHeadersExpanded(false);
@@ -246,6 +470,13 @@ export function ResponsePanel({
             onClick={() => setActiveTab("response")}
           >
             결과
+          </button>
+          <button
+            type="button"
+            className={`tab ${activeTab === "document" ? "tab--active" : ""}`}
+            onClick={() => setActiveTab("document")}
+          >
+            문서
           </button>
           <button
             type="button"
@@ -329,6 +560,90 @@ export function ResponsePanel({
                   <pre className="response-block">
                     {parsed ? parsed.bodyPretty : response}
                   </pre>
+                )}
+              </div>
+            </div>
+          )
+        ) : activeTab === "document" ? (
+          responseSchemas.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state__title">응답 문서가 없습니다</div>
+              <div className="empty-state__body">
+                OpenAPI 응답 스키마가 정의되지 않았습니다.
+              </div>
+            </div>
+          ) : (
+            <div className="response-layout">
+              <div className="response-section">
+                <div className="response-section__header">
+                  <div className="response-section__title">Schema</div>
+                  {activeSchema ? (
+                    <div className="schema-meta">
+                      <span className="pill">{activeSchema.status}</span>
+                      {activeSchema.content_type ? (
+                        <span className="pill">{activeSchema.content_type}</span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+                {showFallbackNotice ? (
+                  <div className="schema-hint">
+                    응답 상태({statusCode})와 일치하는 스키마가 없어 기본
+                    스키마를 표시합니다.
+                  </div>
+                ) : null}
+                {activeSchema?.description ? (
+                  <div className="schema-hint">{activeSchema.description}</div>
+                ) : null}
+                {responseSchemas.length > 1 ? (
+                  <div className="schema-hint">
+                    정의된 응답: {schemaStatuses}
+                  </div>
+                ) : null}
+                {schemaRows.length > 0 ? (
+                  <div className="schema-table__wrap">
+                    <table className="schema-table">
+                      <thead>
+                        <tr>
+                          <th>필드</th>
+                          <th>타입</th>
+                          <th>필수</th>
+                          <th>설명</th>
+                          <th>예시</th>
+                          <th>포맷</th>
+                          <th>Enum</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {schemaRows.map((row, index) => (
+                          <tr key={`${row.path}-${index}`}>
+                            <td
+                              className="schema-cell schema-cell--path"
+                              style={{ paddingLeft: `${row.depth * 12}px` }}
+                              title={row.path}
+                            >
+                              <code>{row.name}</code>
+                            </td>
+                            <td>{row.type}</td>
+                            <td>{row.required ? "필수" : "-"}</td>
+                            <td>{row.description || "-"}</td>
+                            <td>{row.example || "-"}</td>
+                            <td>{row.format || "-"}</td>
+                            <td>{row.enumValues || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <div className="empty-state__title">
+                      스키마가 없습니다
+                    </div>
+                    <div className="empty-state__body">
+                      응답 스키마를 확인할 수 없습니다.
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

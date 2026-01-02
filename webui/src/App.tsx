@@ -939,6 +939,7 @@ function App() {
           response={response}
           isSending={isSending}
           history={visibleHistory}
+          responseSchemas={selectedEndpoint?.response_schemas ?? []}
           onReuseHistory={reuseHistory}
           onPreviewHistory={previewHistory}
         />
