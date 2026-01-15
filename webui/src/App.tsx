@@ -44,6 +44,57 @@ function endpointKey(endpoint: Endpoint) {
   return `${endpoint.method}:${endpoint.path}`;
 }
 
+function collectEndpointSnapshot(collection: Collection | null) {
+  const keys = new Set<string>();
+  const labels = new Map<string, string>();
+  if (!collection) {
+    return { keys, labels };
+  }
+  Object.values(collection.groups).forEach((endpoints) => {
+    endpoints.forEach((endpoint) => {
+      const key = endpointKey(endpoint);
+      keys.add(key);
+      labels.set(key, `${endpoint.method} ${endpoint.path}`);
+    });
+  });
+  return { keys, labels };
+}
+
+function diffCollectionEndpoints(prev: Collection | null, next: Collection) {
+  const prevSnapshot = collectEndpointSnapshot(prev);
+  const nextSnapshot = collectEndpointSnapshot(next);
+  const added: string[] = [];
+  const removed: string[] = [];
+
+  nextSnapshot.keys.forEach((key) => {
+    if (!prevSnapshot.keys.has(key)) {
+      added.push(nextSnapshot.labels.get(key) || key);
+    }
+  });
+
+  prevSnapshot.keys.forEach((key) => {
+    if (!nextSnapshot.keys.has(key)) {
+      removed.push(prevSnapshot.labels.get(key) || key);
+    }
+  });
+
+  added.sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  removed.sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+
+  return { added, removed };
+}
+
+function formatEndpointList(entries: string[], maxItems = 4) {
+  if (entries.length === 0) {
+    return "";
+  }
+  if (entries.length <= maxItems) {
+    return entries.join(", ");
+  }
+  const head = entries.slice(0, maxItems).join(", ");
+  return `${head} 외 ${entries.length - maxItems}개`;
+}
+
 function isAbsoluteUrl(value: string) {
   return /^https?:\/\//i.test(value);
 }
@@ -218,11 +269,22 @@ function App() {
   useEffect(() => {
     const unlisten = listen<Collection>("collection-updated", (event) => {
       const col = event.payload;
+      const prevCollection = collectionsRef.current[col.url] || null;
+      const { added, removed } = diffCollectionEndpoints(prevCollection, col);
+      const addedText = added.length
+        ? `추가: ${formatEndpointList(added)}`
+        : "";
+      const removedText = removed.length
+        ? `삭제: ${formatEndpointList(removed)}`
+        : "";
+      const detailText = [addedText, removedText].filter(Boolean).join(" / ");
       setCollections((prev) => ({ ...prev, [col.url]: col }));
       setLastSyncedAt(Date.now());
       setSyncStatus("updated");
       scheduleSyncReset();
-      showMessage(`Updated: ${col.name}`);
+      showMessage(
+        `${col.name} 동기화 완료${detailText ? ` (${detailText})` : " (변경 없음)"}`
+      );
     });
     return () => {
       unlisten.then((cleanup) => cleanup());
