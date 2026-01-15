@@ -242,6 +242,30 @@
   font-size: 0.95rem;
 }
 
+.collection__auth {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  background: var(--surface);
+}
+
+.collection__auth-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.collection__auth input {
+  border: 1px solid var(--outline);
+  background: var(--surface);
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+}
+
 .tag-group {
   display: grid;
   gap: 6px;

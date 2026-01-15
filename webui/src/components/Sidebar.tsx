@@ -8,6 +8,8 @@ type SidebarProps = {
   openApiHistory: string[];
   onSelectOpenApiHistory: (url: string) => void;
   collections: Record<string, Collection>;
+  collectionAuthTokens: Record<string, string>;
+  onCollectionAuthTokenChange: (url: string, value: string) => void;
   selectedEndpointKey: string | null;
   onSelectEndpoint: (endpoint: Endpoint, collectionUrl: string) => void;
   onToggleCollectionSync: (url: string, enabled: boolean) => void;
@@ -70,6 +72,8 @@ export function Sidebar({
   openApiHistory,
   onSelectOpenApiHistory,
   collections,
+  collectionAuthTokens,
+  onCollectionAuthTokenChange,
   selectedEndpointKey,
   onSelectEndpoint,
   onToggleCollectionSync,
@@ -237,76 +241,101 @@ export function Sidebar({
                 <span className="sync-toggle__label">동기화</span>
               </label>
             </div>
-            {expandedCollections[collection.url] &&
-              Object.entries(collection.groups)
-                .sort(([tagA], [tagB]) => sortByLabel(tagA, tagB))
-                .map(([tag, endpoints]) => {
-                  const groupKey = `${collection.url}::${tag}`;
-                  const isGroupOpen = expandedGroups[groupKey];
-                  const sortedEndpoints = [...endpoints].sort((a, b) =>
-                    sortByLabel(endpointSortKey(a), endpointSortKey(b))
-                  );
-                  return (
-                    <div key={tag} className="tag-group">
-                      <button
-                        type="button"
-                        className="tag-group__toggle"
-                        onClick={() => toggleGroup(groupKey)}
-                        aria-expanded={Boolean(isGroupOpen)}
-                      >
-                        <span className="tag-group__title">{tag}</span>
-                        <span
-                          className={`chevron ${isGroupOpen ? "chevron--open" : ""
-                            }`}
-                          aria-hidden="true"
+            {expandedCollections[collection.url] && (
+              <>
+                <div className="collection__auth">
+                  <label
+                    className="collection__auth-label"
+                    htmlFor={`collection-auth-${encodeURIComponent(
+                      collection.url
+                    )}`}
+                  >
+                    Authorization Bearer
+                  </label>
+                  <input
+                    id={`collection-auth-${encodeURIComponent(collection.url)}`}
+                    value={collectionAuthTokens[collection.url] || ""}
+                    onChange={(event) =>
+                      onCollectionAuthTokenChange(
+                        collection.url,
+                        event.target.value
+                      )
+                    }
+                    placeholder="Bearer 토큰 (선택)"
+                    autoComplete="off"
+                  />
+                </div>
+                {Object.entries(collection.groups)
+                  .sort(([tagA], [tagB]) => sortByLabel(tagA, tagB))
+                  .map(([tag, endpoints]) => {
+                    const groupKey = `${collection.url}::${tag}`;
+                    const isGroupOpen = expandedGroups[groupKey];
+                    const sortedEndpoints = [...endpoints].sort((a, b) =>
+                      sortByLabel(endpointSortKey(a), endpointSortKey(b))
+                    );
+                    return (
+                      <div key={tag} className="tag-group">
+                        <button
+                          type="button"
+                          className="tag-group__toggle"
+                          onClick={() => toggleGroup(groupKey)}
+                          aria-expanded={Boolean(isGroupOpen)}
                         >
-                          ▾
-                        </span>
-                      </button>
-                      {isGroupOpen &&
-                        sortedEndpoints.map((endpoint) => {
-                          const key = endpointKey(endpoint);
-                          return (
-                            <div
-                              key={key}
-                              role="button"
-                              tabIndex={0}
-                              className={`endpoint ${selectedEndpointKey === key
-                                  ? "endpoint--active"
-                                  : ""
-                                }`}
-                              onClick={() =>
-                                onSelectEndpoint(endpoint, collection.url)
-                              }
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter" || event.key === " ") {
-                                  event.preventDefault();
-                                  onSelectEndpoint(endpoint, collection.url);
+                          <span className="tag-group__title">{tag}</span>
+                          <span
+                            className={`chevron ${isGroupOpen ? "chevron--open" : ""
+                              }`}
+                            aria-hidden="true"
+                          >
+                            ▾
+                          </span>
+                        </button>
+                        {isGroupOpen &&
+                          sortedEndpoints.map((endpoint) => {
+                            const key = endpointKey(endpoint);
+                            return (
+                              <div
+                                key={key}
+                                role="button"
+                                tabIndex={0}
+                                className={`endpoint ${selectedEndpointKey === key
+                                    ? "endpoint--active"
+                                    : ""
+                                  }`}
+                                onClick={() =>
+                                  onSelectEndpoint(endpoint, collection.url)
                                 }
-                              }}
-                            >
-                              <span
-                                className={`method-pill method-pill--${endpoint.method}`}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    onSelectEndpoint(endpoint, collection.url);
+                                  }
+                                }}
                               >
-                                {endpoint.method}
-                              </span>
-                              <span className="endpoint__text">
-                                <span className="endpoint__name">
-                                  {endpointLabel(endpoint)}
-                                </span>
                                 <span
-                                  className="endpoint__path"
-                                  title={endpoint.path}
+                                  className={`method-pill method-pill--${endpoint.method}`}
                                 >
-                                  {formatEndpointPath(endpoint.path)}
+                                  {endpoint.method}
                                 </span>
-                              </span>
-                            </div>
-                          );
-                        })}
-                    </div>
-                  );
-                })}
+                                <span className="endpoint__text">
+                                  <span className="endpoint__name">
+                                    {endpointLabel(endpoint)}
+                                  </span>
+                                  <span
+                                    className="endpoint__path"
+                                    title={endpoint.path}
+                                  >
+                                    {formatEndpointPath(endpoint.path)}
+                                  </span>
+                                </span>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    );
+                  })}
+              </>
+            )}
           </div>
         ))}
       </div>

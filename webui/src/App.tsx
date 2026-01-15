@@ -30,6 +30,7 @@ const formBodyTypes = new Set([
 const historyStorageKey = "restman.history";
 const openApiHistoryKey = "restman.openapiHistory";
 const autoRequestIntervalKey = "restman.autoRequestInterval";
+const collectionAuthTokenKey = "restman.collectionAuthTokens";
 const sidebarWidthKey = "restman.sidebarWidth";
 const statusResetDelayMs = 4500;
 const maxHistoryEntries = 50;
@@ -137,6 +138,20 @@ function formatBodyExample(bodyExample?: string) {
   }
 }
 
+function formatBearerToken(token?: string | null) {
+  if (!token) {
+    return "";
+  }
+  const trimmed = token.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/^Bearer\s+/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `Bearer ${trimmed}`;
+}
+
 function App() {
   const [collections, setCollections] = useState<Record<string, Collection>>({});
   const [openApiUrl, setOpenApiUrl] = useState("");
@@ -153,6 +168,9 @@ function App() {
   const [statusMessage, setStatusMessage] = useState("Ready");
   const [isImporting, setIsImporting] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [collectionAuthTokens, setCollectionAuthTokens] = useState<
+    Record<string, string>
+  >({});
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [endpointDrafts, setEndpointDrafts] = useState<
     Record<string, RequestDraft>
@@ -175,6 +193,7 @@ function App() {
   const autoRequestTimersRef = useRef<Record<string, number>>({});
   const autoRequestInFlightRef = useRef<Record<string, boolean>>({});
   const draftsRef = useRef(endpointDrafts);
+  const collectionAuthTokensRef = useRef(collectionAuthTokens);
   const collectionsRef = useRef(collections);
   const appRef = useRef<HTMLDivElement | null>(null);
   const isResizingRef = useRef(false);
@@ -240,6 +259,17 @@ function App() {
         setAutoRequestIntervalMs(parsed);
       }
     }
+    const authStored = window.localStorage.getItem(collectionAuthTokenKey);
+    if (authStored) {
+      try {
+        const parsed = JSON.parse(authStored) as Record<string, string>;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          setCollectionAuthTokens(parsed);
+        }
+      } catch {
+        setCollectionAuthTokens({});
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -261,12 +291,23 @@ function App() {
   }, [autoRequestIntervalMs]);
 
   useEffect(() => {
+    window.localStorage.setItem(
+      collectionAuthTokenKey,
+      JSON.stringify(collectionAuthTokens)
+    );
+  }, [collectionAuthTokens]);
+
+  useEffect(() => {
     window.localStorage.setItem(sidebarWidthKey, String(sidebarWidth));
   }, [sidebarWidth]);
 
   useEffect(() => {
     draftsRef.current = endpointDrafts;
   }, [endpointDrafts]);
+
+  useEffect(() => {
+    collectionAuthTokensRef.current = collectionAuthTokens;
+  }, [collectionAuthTokens]);
 
   useEffect(() => {
     collectionsRef.current = collections;
@@ -584,7 +625,8 @@ function App() {
     bodyInput: string,
     bodyTypeInput: string,
     formValuesInput: Record<string, string>,
-    fileValuesInput: Record<string, string[]>
+    fileValuesInput: Record<string, string[]>,
+    collectionAuthToken?: string
   ) {
     let finalUrl = urlInput;
     const headers: Record<string, string> = {};
@@ -617,6 +659,10 @@ function App() {
       Object.keys(headers).some(
         (key) => key.toLowerCase() === name.toLowerCase()
       );
+    const authHeader = formatBearerToken(collectionAuthToken);
+    if (authHeader && !hasHeader("Authorization")) {
+      headers["Authorization"] = authHeader;
+    }
     const isFormBody = isFormBodyType(bodyTypeInput);
     const allowBody = methodInput !== "GET";
     let body: string | null = null;
@@ -669,6 +715,9 @@ function App() {
     autoRequestInFlightRef.current[key] = true;
     const collectionUrl = findCollectionUrlForEndpoint(endpoint);
     const resolvedEndpointUrl = resolveEndpointUrl(endpoint, collectionUrl);
+    const collectionAuthToken = collectionUrl
+      ? collectionAuthTokensRef.current[collectionUrl]
+      : undefined;
     const draft = draftsRef.current[key] || buildDraftFromEndpoint(endpoint);
     const { finalUrl, headers, body, multipart } = buildRequestPayload(
       endpoint,
@@ -678,7 +727,8 @@ function App() {
       draft.body,
       draft.bodyType,
       draft.formValues,
-      draft.fileValues
+      draft.fileValues,
+      collectionAuthToken
     );
     try {
       const res: string = await invoke("request", {
@@ -738,6 +788,12 @@ function App() {
     let finalResponse = "";
     let resolvedUrl = trimmedUrl;
     try {
+      const collectionUrl = selectedEndpoint
+        ? findCollectionUrlForEndpoint(selectedEndpoint)
+        : null;
+      const collectionAuthToken = collectionUrl
+        ? collectionAuthTokens[collectionUrl]
+        : undefined;
       const { finalUrl, headers, body, multipart } = buildRequestPayload(
         selectedEndpoint,
         method,
@@ -746,7 +802,8 @@ function App() {
         bodySnapshot,
         bodyTypeSnapshot,
         formSnapshot,
-        fileSnapshot
+        fileSnapshot,
+        collectionAuthToken
       );
       resolvedUrl = finalUrl;
       const res: string = await invoke("request", {
@@ -811,6 +868,18 @@ function App() {
         openApiHistory={openApiHistory}
         onSelectOpenApiHistory={setOpenApiUrl}
         collections={collections}
+        collectionAuthTokens={collectionAuthTokens}
+        onCollectionAuthTokenChange={(url, value) =>
+          setCollectionAuthTokens((prev) => {
+            const next = { ...prev };
+            if (value.trim()) {
+              next[url] = value;
+            } else {
+              delete next[url];
+            }
+            return next;
+          })
+        }
         selectedEndpointKey={selectedEndpointKey}
         onSelectEndpoint={selectEndpoint}
         onToggleCollectionSync={async (url, enabled) => {
