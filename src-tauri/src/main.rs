@@ -295,14 +295,18 @@ fn extract_parameter_example(doc: &Value, param: &Value) -> Option<Value> {
 
 fn extract_request_body_example(doc: &Value, request_body: &Value) -> Option<Value> {
     let resolved = resolve_ref(doc, request_body, 0);
-    let content = resolved.get("content")?;
-    let json_content = content.get("application/json")?;
-    if let Some(example) = json_content.get("example") {
+    let content = resolved.get("content")?.as_object()?;
+    let content_value = if let Some(json_content) = content.get("application/json") {
+        json_content
+    } else {
+        content.values().next()?
+    };
+    if let Some(example) = content_value.get("example") {
         if !example.is_null() {
             return Some(example.clone());
         }
     }
-    if let Some(examples) = json_content.get("examples").and_then(|v| v.as_object()) {
+    if let Some(examples) = content_value.get("examples").and_then(|v| v.as_object()) {
         for example in examples.values() {
             if let Some(value) = example.get("value") {
                 if !value.is_null() {
@@ -311,7 +315,7 @@ fn extract_request_body_example(doc: &Value, request_body: &Value) -> Option<Val
             }
         }
     }
-    if let Some(schema) = json_content.get("schema") {
+    if let Some(schema) = content_value.get("schema") {
         if let Some(example) = build_example_from_schema(doc, schema, 0) {
             return Some(example);
         }
@@ -324,11 +328,13 @@ fn extract_request_body_description(doc: &Value, request_body: &Value) -> Option
     if let Some(desc) = resolved.get("description").and_then(|v| v.as_str()) {
         return Some(desc.to_string());
     }
-    if let Some(content) = resolved.get("content") {
-        if let Some(schema) = content
-            .get("application/json")
-            .and_then(|v| v.get("schema"))
-        {
+    if let Some(content) = resolved.get("content").and_then(|v| v.as_object()) {
+        let content_value = if let Some(json_content) = content.get("application/json") {
+            json_content
+        } else {
+            content.values().next()?
+        };
+        if let Some(schema) = content_value.get("schema") {
             let schema = resolve_ref(doc, schema, 0);
             if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
                 return Some(desc.to_string());
@@ -721,6 +727,89 @@ async fn background_update_checker(app_handle: tauri::AppHandle) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn request_body_example_uses_first_content_when_json_missing() {
+        let doc = json!({
+            "openapi": "3.0.1",
+            "paths": {
+                "/aes": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "*/*": {
+                                    "schema": { "$ref": "#/components/schemas/AesEncryptRequest" }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "components": {
+                "schemas": {
+                    "AesEncryptRequest": {
+                        "type": "object",
+                        "properties": {
+                            "plainText": { "type": "string", "example": "Hello Onione!" }
+                        },
+                        "required": ["plainText"]
+                    }
+                }
+            }
+        });
+        let request_body = doc
+            .pointer("/paths/~1aes/post/requestBody")
+            .expect("missing requestBody");
+        let example = extract_request_body_example(&doc, request_body)
+            .expect("missing example");
+        assert_eq!(example, json!({ "plainText": "Hello Onione!" }));
+    }
+
+    #[test]
+    fn request_body_example_prefers_application_json() {
+        let doc = json!({
+            "openapi": "3.0.1",
+            "paths": {
+                "/aes": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "example": { "plainText": "FromExample" },
+                                    "schema": { "$ref": "#/components/schemas/AesEncryptRequest" }
+                                },
+                                "*/*": {
+                                    "schema": { "$ref": "#/components/schemas/AesEncryptRequest" }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "components": {
+                "schemas": {
+                    "AesEncryptRequest": {
+                        "type": "object",
+                        "properties": {
+                            "plainText": { "type": "string", "example": "Hello Onione!" }
+                        }
+                    }
+                }
+            }
+        });
+        let request_body = doc
+            .pointer("/paths/~1aes/post/requestBody")
+            .expect("missing requestBody");
+        let example = extract_request_body_example(&doc, request_body)
+            .expect("missing example");
+        assert_eq!(example, json!({ "plainText": "FromExample" }));
     }
 }
 
