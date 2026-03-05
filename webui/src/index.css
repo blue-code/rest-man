@@ -20,6 +20,7 @@
   --get: #2a9d8f;
   --post: #f4a261;
   --put: #ff6b35;
+  --patch: #577590;
   --delete: #e63946;
   --shadow: 0 18px 40px rgba(22, 27, 34, 0.12);
 }

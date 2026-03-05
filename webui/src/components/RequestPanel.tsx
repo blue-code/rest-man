@@ -25,7 +25,7 @@ type RequestPanelProps = {
   onFileValuesChange: (name: string, paths: string[]) => void;
 };
 
-const methodOptions: HttpMethod[] = ["GET", "POST", "PUT", "DELETE"];
+const methodOptions: HttpMethod[] = ["GET", "POST", "PUT", "DELETE", "PATCH"];
 
 function hasBody(method: HttpMethod) {
   return method !== "GET";

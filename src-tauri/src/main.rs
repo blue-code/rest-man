@@ -609,6 +609,7 @@ async fn request(
         "POST" => reqwest::Method::POST,
         "PUT" => reqwest::Method::PUT,
         "DELETE" => reqwest::Method::DELETE,
+        "PATCH" => reqwest::Method::PATCH,
         _ => return Err("Invalid method".into()),
     };
 

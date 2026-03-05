@@ -420,6 +420,11 @@
   border-color: rgba(255, 107, 53, 0.25);
 }
 
+.method-pill--PATCH {
+  color: var(--patch);
+  border-color: rgba(87, 117, 144, 0.3);
+}
+
 .method-pill--DELETE {
   color: var(--delete);
   border-color: rgba(230, 57, 70, 0.3);
